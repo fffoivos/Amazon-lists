@@ -1,0 +1,61 @@
+{
+  "manifest_version": 3,
+  "name": "Amazon List Sidebar",
+  "version": "1.0.0",
+  "description": "Display Amazon lists in a sidebar for easier management",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "amazon-list-sidebar@extension.local",
+      "strict_min_version": "109.0"
+    }
+  },
+  
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+
+  "host_permissions": [
+    "https://*.amazon.com/*",
+    "https://*.amazon.ca/*",
+    "https://*.amazon.co.uk/*",
+    "https://*.amazon.de/*",
+    "https://*.amazon.fr/*",
+    "https://*.amazon.es/*",
+    "https://*.amazon.it/*",
+    "https://*.amazon.co.jp/*"
+  ],
+
+  "sidebar_action": {
+    "default_title": "Amazon Lists",
+    "default_panel": "sidebar/panel.html",
+    "default_icon": "icons/icon-48.png"
+  },
+
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.amazon.com/*",
+        "https://*.amazon.ca/*",
+        "https://*.amazon.co.uk/*",
+        "https://*.amazon.de/*",
+        "https://*.amazon.fr/*",
+        "https://*.amazon.es/*",
+        "https://*.amazon.it/*",
+        "https://*.amazon.co.jp/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "background": {
+    "scripts": ["background.js"]
+  },
+
+  "icons": {
+    "16": "icons/icon-16.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  }
+}

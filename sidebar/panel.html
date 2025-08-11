@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Amazon Lists</title>
+  <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+  <div id="sidebar-container">
+    <header>
+      <h1>Amazon Lists</h1>
+      <button id="refresh-btn" title="Refresh lists">↻</button>
+    </header>
+    
+    <div id="product-info" class="hidden">
+      <img id="product-image" src="" alt="">
+      <div id="product-details">
+        <h3 id="product-title"></h3>
+        <p id="product-price"></p>
+      </div>
+    </div>
+    
+    <div id="tabs-container">
+      <button id="tab-all" class="tab-button active">All Lists</button>
+      <button id="tab-recent" class="tab-button">Recent</button>
+    </div>
+    
+    <div id="search-container">
+      <input 
+        type="text" 
+        id="search-input" 
+        placeholder="Search lists..."
+        autocomplete="off"
+      >
+      <button id="clear-search" class="hidden">×</button>
+    </div>
+    
+    <div id="lists-container">
+      <div id="loading-message">
+        <div class="spinner"></div>
+        <p>Loading your lists...</p>
+        <p class="hint">Click the dropdown arrow (▼) next to "Add to List" on Amazon</p>
+        <p class="hint">This opens the list menu without adding to wishlist</p>
+      </div>
+      
+      <div id="no-lists-message" class="hidden">
+        <p>No lists found</p>
+        <p class="hint">Make sure you're on an Amazon product page</p>
+      </div>
+      
+      <div id="lists-wrapper" class="hidden">
+        <div id="all-lists" class="list-section">
+          <ul id="list-items"></ul>
+        </div>
+        
+        <div id="recent-lists" class="list-section hidden">
+          <ul id="recent-list-items"></ul>
+          <p id="no-recent" class="hint hidden">No recently used lists</p>
+        </div>
+      </div>
+    </div>
+    
+    <footer>
+      <div id="status-message" class="hidden"></div>
+      <div id="list-stats">
+        <span id="total-lists">0 lists</span>
+      </div>
+    </footer>
+  </div>
+  
+  <script src="panel.js"></script>
+</body>
+</html>
