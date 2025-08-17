@@ -6,7 +6,6 @@ let recentListIds = [];
 const elements = {
   searchInput: document.getElementById('search-input'),
   clearSearch: document.getElementById('clear-search'),
-  refreshBtn: document.getElementById('refresh-btn'),
   listsContainer: document.getElementById('lists-container'),
   loadingMessage: document.getElementById('loading-message'),
   noListsMessage: document.getElementById('no-lists-message'),
@@ -24,7 +23,10 @@ const elements = {
   tabAll: document.getElementById('tab-all'),
   tabRecent: document.getElementById('tab-recent'),
   allLists: document.getElementById('all-lists'),
-  noRecent: document.getElementById('no-recent')
+  noRecent: document.getElementById('no-recent'),
+  settingsBtn: document.getElementById('settings-btn'),
+  settingsPanel: document.getElementById('settings-panel'),
+  persistToggle: document.getElementById('persist-search-toggle')
 };
 
 let currentTab = 'all';
@@ -107,14 +109,15 @@ function createListItem(list, isRecent = false) {
 
 async function addToList(listId, listName) {
   showStatus(`Adding to "${listName}"...`, 'loading');
-  
   try {
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    await browser.tabs.sendMessage(tabs[0].id, {
+    const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
+    const resp = await browser.tabs.sendMessage(tabsArr[0].id, {
       type: 'ADD_TO_LIST',
-      listId: listId
+      listId
     });
-    
+    if (!resp || !resp.success) {
+      throw new Error(resp && resp.error ? resp.error : 'Unknown add error');
+    }
     showStatus(`✓ Added to "${listName}"`, 'success');
     await saveRecentList(listId);
     updateRecentListsDisplay();
@@ -217,9 +220,19 @@ function filterLists(searchTerm) {
 
 async function requestListsFromContent() {
   try {
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0] && tabs[0].url.includes('amazon.')) {
-      await browser.tabs.sendMessage(tabs[0].id, { type: 'REQUEST_LISTS' });
+    const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
+    if (tabsArr[0] && tabsArr[0].url && tabsArr[0].url.includes('amazon.')) {
+      const resp = await browser.tabs.sendMessage(tabsArr[0].id, { type: 'REQUEST_LISTS' });
+      if (resp && resp.success) {
+        const count = typeof resp.listCount === 'number' ? resp.listCount : (allLists?.length || 0);
+        if (count > 0) {
+          showStatus(`Found ${count} lists`, 'info');
+        } else {
+          showStatus('No lists found yet. Opening dropdown...', 'info');
+        }
+      } else {
+        showStatus('Scanning page for lists...', 'loading');
+      }
     } else {
       showStatus('Please navigate to an Amazon product page', 'info');
     }
@@ -245,51 +258,43 @@ elements.clearSearch.addEventListener('click', () => {
   filterLists('');
 });
 
-elements.refreshBtn.addEventListener('click', async () => {
-  elements.refreshBtn.classList.add('spinning');
-  showStatus('Scanning page for lists...', 'loading');
-  
+// Settings: persist dropdown search after click (default true)
+async function loadSettings() {
   try {
-    const tabs = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tabs[0] && tabs[0].url.includes('amazon.')) {
-      // Send request to content script
-      await browser.tabs.sendMessage(tabs[0].id, { type: 'REQUEST_LISTS' });
-      
-      // Also inject a direct scan attempt
-      const results = await browser.tabs.executeScript(tabs[0].id, {
-        code: `
-          (function() {
-            const listElements = document.querySelectorAll('span[id^="atwl-list-name-"]');
-            
-            // Check for visible popover
-            const popover = document.querySelector('.a-popover[aria-hidden="false"]');
-            
-            // Return count for debugging
-            return {
-              listCount: listElements.length,
-              popoverVisible: !!popover
-            };
-          })();
-        `
-      });
-      
-      if (results && results[0]) {
-        if (results[0].listCount === 0) {
-          showStatus('No lists found. Open the dropdown first!', 'error');
-        } else {
-          showStatus(`Found ${results[0].listCount} lists`, 'info');
-        }
-      }
-    }
-  } catch (error) {
-    console.error('Error:', error);
-    showStatus('Error scanning page', 'error');
+    const res = await browser.storage.sync.get('persistDropdownSearch');
+    const persist = res && typeof res.persistDropdownSearch === 'boolean' ? res.persistDropdownSearch : true;
+    if (elements.persistToggle) elements.persistToggle.checked = persist;
+  } catch (_) {
+    if (elements.persistToggle) elements.persistToggle.checked = true;
   }
-  
-  setTimeout(() => {
-    elements.refreshBtn.classList.remove('spinning');
-  }, 1000);
-});
+}
+
+async function savePersistSetting(value) {
+  try {
+    await browser.storage.sync.set({ persistDropdownSearch: !!value });
+  } catch (_) {}
+}
+
+function setupSettingsUI() {
+  if (elements.settingsBtn && elements.settingsPanel) {
+    elements.settingsBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      elements.settingsPanel.classList.toggle('hidden');
+    });
+    document.addEventListener('click', (e) => {
+      const within = e.target.closest && e.target.closest('#settings-panel');
+      const isBtn = e.target === elements.settingsBtn;
+      if (!within && !isBtn) {
+        elements.settingsPanel.classList.add('hidden');
+      }
+    });
+  }
+  if (elements.persistToggle) {
+    elements.persistToggle.addEventListener('change', (e) => {
+      savePersistSetting(!!e.target.checked);
+    });
+  }
+}
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'UPDATE_LISTS') {
@@ -330,6 +335,8 @@ elements.tabRecent.addEventListener('click', () => switchTab('recent'));
 
 async function initialize() {
   await loadRecentLists();
+  await loadSettings();
+  setupSettingsUI();
   
   let listsLoaded = false;
   

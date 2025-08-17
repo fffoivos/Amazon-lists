@@ -10,7 +10,6 @@
   <div id="sidebar-container">
     <header>
       <h1>Amazon Lists</h1>
-      <button id="refresh-btn" title="Refresh lists">↻</button>
     </header>
     
     <div id="product-info" class="hidden">
@@ -67,6 +66,17 @@
         <span id="total-lists">0 lists</span>
       </div>
     </footer>
+    
+    <!-- Settings UI -->
+    <button id="settings-btn" title="Settings" aria-label="Settings" style="position: absolute; bottom: 10px; right: 10px;">⚙</button>
+    <div id="settings-panel" class="hidden" role="dialog" aria-modal="false" aria-label="Settings" style="position: absolute; bottom: 40px; right: 10px; background-color: #fff; border: 1px solid #ddd; padding: 10px; border-radius: 5px;">
+      <div class="settings-row">
+        <label>
+          <input type="checkbox" id="persist-search-toggle" checked>
+          Search results persist after click
+        </label>
+      </div>
+    </div>
   </div>
   
   <script src="panel.js"></script>

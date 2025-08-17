@@ -1,6 +1,7 @@
 let productInfo = null;
 let userLists = [];
 let addToListButton = null;
+let persistDropdownSearch = true; // default: persist search results after click
 
 function detectProductPage() {
   const isProductPage = 
@@ -9,6 +10,16 @@ function detectProductPage() {
     document.querySelector('#productTitle') !== null;
   
   return isProductPage;
+}
+
+// Load user setting for whether Amazon dropdown search should persist after click
+async function loadPersistSetting() {
+  try {
+    const res = await browser.storage.sync.get('persistDropdownSearch');
+    persistDropdownSearch = (res && typeof res.persistDropdownSearch === 'boolean') ? res.persistDropdownSearch : true;
+  } catch (_) {
+    persistDropdownSearch = true;
+  }
 }
 
 function extractProductInfo() {
@@ -84,6 +95,158 @@ function findAddToListButton() {
   }
   
   return null;
+}
+
+// Helper: wait for an element matching selector to appear/meet condition
+async function waitForElement(selector, { root = document, timeout = 3000, condition = (el) => true } = {}) {
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const check = () => {
+      const el = root.querySelector(selector);
+      if (el && condition(el)) {
+        observer.disconnect();
+        return resolve(el);
+      }
+      if (Date.now() - start >= timeout) {
+        observer.disconnect();
+        return reject(new Error(`Timeout waiting for ${selector}`));
+      }
+    };
+    const observer = new MutationObserver(() => {
+      try { check(); } catch (_) {}
+    });
+    // Initial check
+    try { check(); } catch (_) {}
+    observer.observe(root === document ? document.body : root, { childList: true, subtree: true, attributes: true });
+    setTimeout(() => { try { observer.disconnect(); } catch(_) {} }, timeout);
+  });
+}
+
+// Helper: dispatch a robust mouse interaction sequence on a target element
+function dispatchMouseSequence(target) {
+  if (!target) return;
+  const opts = { bubbles: true, cancelable: true, view: window, buttons: 1 };
+  const hasPointer = typeof window.PointerEvent === 'function';
+  try { if (hasPointer) target.dispatchEvent(new PointerEvent('pointerover', opts)); } catch(_) {}
+  try { target.dispatchEvent(new MouseEvent('mouseover', opts)); } catch(_) {}
+  try { if (hasPointer) target.dispatchEvent(new PointerEvent('pointerdown', opts)); } catch(_) {}
+  try { target.dispatchEvent(new MouseEvent('mousedown', opts)); } catch(_) {}
+  try { if (hasPointer) target.dispatchEvent(new PointerEvent('pointerup', opts)); } catch(_) {}
+  try { target.dispatchEvent(new MouseEvent('mouseup', opts)); } catch(_) {}
+  try { target.dispatchEvent(new MouseEvent('click', opts)); } catch(_) {}
+}
+
+// Persist the user's list search filter across reopens/navigation until success
+function setPersistentListFilter(value) {
+  try { sessionStorage.setItem('als_list_filter', value || ''); } catch (_) {}
+}
+function getPersistentListFilter() {
+  try { return sessionStorage.getItem('als_list_filter') || ''; } catch (_) { return ''; }
+}
+function clearPersistentListFilter() {
+  try { sessionStorage.removeItem('als_list_filter'); } catch (_) {}
+}
+
+// Helpers: list popover search filter handling
+function findListSearchInput(scopeEl) {
+  const pop = (scopeEl && scopeEl.querySelector) ? scopeEl : document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner, .a-dropdown');
+  const container = pop || document;
+  const input = container.querySelector('input[type="search"], input[placeholder*="Search" i], input[aria-label*="Search" i], input[type="text"]');
+  if (input && !input.dataset.alsFilterListenerAttached) {
+    input.addEventListener('input', () => { try { setPersistentListFilter(input.value); } catch (_) {} });
+    input.dataset.alsFilterListenerAttached = '1';
+  }
+  return input;
+}
+
+function getListFilterValue(scopeEl) {
+  try {
+    const input = findListSearchInput(scopeEl);
+    return (input && typeof input.value === 'string') ? input.value : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function setListFilterValue(scopeEl, value) {
+  try {
+    const input = findListSearchInput(scopeEl);
+    if (!input) return false;
+    if ((input.value || '') === (value || '')) return true;
+    input.value = value || '';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Helper: wait for amazon list popover to be visible
+async function waitForPopoverVisible(timeout = 4000) {
+  const condition = (el) => el.getAttribute('aria-hidden') !== 'true';
+  try {
+    const pop = await waitForElement('.a-popover', { timeout, condition });
+    return pop;
+  } catch (e) {
+    // Fallback: inner container appears without aria-hidden
+    try {
+      await waitForElement('#atwl-popover-inner, .a-dropdown', { timeout });
+      return document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner, .a-dropdown');
+    } catch (_) {
+      throw e;
+    }
+  }
+}
+
+// Open the add-to-list dropdown reliably and wait for it to be interactive
+async function openListDropdownAndWait() {
+  // If already visible, return it
+  const existing = document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner');
+  if (existing) return existing;
+
+  const btn = findAddToListButton();
+  if (!btn) throw new Error('Add-to-list dropdown button not found');
+  try { btn.scrollIntoView({ block: 'center' }); } catch(_) {}
+  dispatchMouseSequence(btn);
+  const popover = await waitForPopoverVisible(5000);
+  // Small delay to let content render
+  await new Promise(r => setTimeout(r, 100));
+  // Restore any persisted filter if present
+  const persisted = getPersistentListFilter();
+  if (persistDropdownSearch && persisted) {
+    try { setListFilterValue(popover, persisted); } catch (_) {}
+  }
+  extractListsFromDropdown(popover);
+  return popover;
+}
+
+// Wait for confirmation after clicking a list entry
+async function waitForAddConfirmation(popover, timeout = 5000) {
+  const start = Date.now();
+  function isSuccessVisible() {
+    const header = document.querySelector('.huc-atwl-header-main');
+    if (header && /added|moved|already/i.test((header.textContent || ''))) return true;
+    const regions = document.querySelectorAll('.a-popover[aria-hidden="false"], #atwl-popover-inner, .a-dropdown, [role="alert"]');
+    for (const el of regions) {
+      const txt = (el.textContent || '').toLowerCase();
+      if (/\b(item|items)\s+(added|moved)\s+to\b/.test(txt) || /already in/.test(txt) || /view your list/.test(txt)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok) => { if (settled) return; settled = true; try { observer.disconnect(); } catch(_) {}; resolve(ok); };
+    const observer = new MutationObserver(() => {
+      if (isSuccessVisible()) done(true);
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    if (isSuccessVisible()) return done(true);
+    const remaining = Math.max(1000, timeout - (Date.now() - start));
+    setTimeout(() => done(false), remaining);
+  });
 }
 
 function interceptListData() {
@@ -236,130 +399,130 @@ function sendProductUpdate(forceUpdate = false) {
 }
 
 function triggerAddToListPopup() {
-  
-  // Don't click anything - just look for existing dropdown
-  // Multiple attempts with different timings
-  const attempts = [0, 500, 1000, 2000];
-  
-  attempts.forEach(delay => {
-    setTimeout(() => {
-      
-      // Look for any visible popover or dropdown
-      const selectors = [
-        '.a-popover[aria-hidden="false"]',
-        '#a-popover-3', // The specific popover from your HTML
-        '.a-popover:not([aria-hidden="true"])',
-        '#atwl-popover-inner',
-        '#atwl-dd-ul',
-        '.a-dropdown',
-        '[id^="atwl-list-name-"]'
-      ];
-      
-      for (const selector of selectors) {
-        const element = document.querySelector(selector);
-        if (element) {
-          // If we found list names directly, use their parent
-          if (selector.includes('atwl-list-name')) {
-            const container = element.closest('.a-popover, .a-dropdown, #atwl-popover-inner') || document.body;
-            extractListsFromDropdown(container);
-          } else {
-            extractListsFromDropdown(element);
-          }
-          break;
-        }
-      }
-      
-      // Also just try scanning the whole document
-      if (userLists.length === 0) {
-        const listElements = document.querySelectorAll('span[id^="atwl-list-name-"]');
-        if (listElements.length > 0) {
-          extractListsFromDropdown(document.body);
-        }
-      }
-    }, delay);
+  // Open (or detect) the popover and extract lists
+  openListDropdownAndWait().catch(() => {
+    // Best-effort fallback: if lists already in DOM, try to extract
+    const container = document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner, .a-dropdown') || document.body;
+    extractListsFromDropdown(container);
   });
 }
 
 function addSidebarToggleButton() {
-  const targetContainer = document.querySelector('#rightCol, #desktop_buybox, #buybox');
-  
-  if (targetContainer && !document.querySelector('#open-sidebar-btn')) {
-    const button = document.createElement('button');
-    button.id = 'open-sidebar-btn';
-    button.textContent = '📚 Open List Sidebar';
-    button.style.cssText = `
-      background: #ff9900;
-      color: white;
-      border: none;
-      padding: 10px 20px;
-      border-radius: 8px;
-      margin: 10px 0;
-      cursor: pointer;
-      font-size: 14px;
-      font-weight: bold;
-      width: 100%;
-      max-width: 300px;
-    `;
-    
-    button.addEventListener('click', () => {
-      browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' });
-      setTimeout(triggerAddToListPopup, 500);
-    });
-    
-    targetContainer.insertBefore(button, targetContainer.firstChild);
-  }
+  // Disabled per user preference: user will open sidebar via Firefox menu
 }
 
-function handleAddToListAction(listId) {
-  
-  // First, make sure dropdown is open
-  const visiblePopover = document.querySelector('.a-popover[aria-hidden="false"]');
-  if (!visiblePopover) {
-    const dropdownBtn = document.querySelector('#add-to-wishlist-button');
-    if (dropdownBtn) {
-      dropdownBtn.click();
-      setTimeout(() => handleAddToListAction(listId), 500);
-      return;
-    }
-  }
-  
-  // Find the list element directly in the DOM by its ID
-  const linkElement = document.querySelector(`#atwl-link-to-list-${listId}`);
-  
-  if (linkElement) {
-    const list = userLists.find(l => l.id === listId);
-    linkElement.click();
-    
-    // The click should trigger Amazon's own add-to-list action
-  } else {
-    // Try to re-scan for lists
-    const popover = document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner');
-    if (popover) {
+// Observe buy box containers and reinject button when DOM changes
+function observeBuyBoxContainers() {
+  // No-op: button injection removed
+}
+
+async function handleAddToListAction(listId) {
+  // Ensure dropdown is open and interactive
+  let popover = await openListDropdownAndWait().catch(() => null);
+  if (!popover) return false;
+
+  const asinAtStart = productInfo?.asin || null;
+  const initialFilter = getListFilterValue(popover);
+  if (persistDropdownSearch && initialFilter) setPersistentListFilter(initialFilter);
+
+  const maxAttempts = 10;
+  const attemptDelayMs = 200;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // Scope all lookups to the currently open popover
+    let linkElement = popover.querySelector(`#atwl-link-to-list-${listId}`);
+
+    if (!linkElement) {
       extractListsFromDropdown(popover);
-      // Try again after re-scanning
-      setTimeout(() => {
-        const retryElement = document.querySelector(`#atwl-link-to-list-${listId}`);
-        if (retryElement) {
-          retryElement.click();
+      linkElement = popover.querySelector(`#atwl-link-to-list-${listId}`);
+    }
+
+    if (!linkElement) {
+      const targetName = (userLists.find(l => l.id === listId)?.name || '').toLowerCase();
+      const candidates = Array.from(popover.querySelectorAll('.a-dropdown-item, a, button, [role="button"]'));
+      linkElement = candidates.find(n => (n.textContent || '').trim().toLowerCase().includes(targetName)) || null;
+    }
+
+    if (!linkElement) {
+      // Could not find the element; try reopen and restore, then retry
+      if (attempt < maxAttempts) {
+        await new Promise(r => setTimeout(r, attemptDelayMs));
+        popover = await openListDropdownAndWait().catch(() => null);
+        if (!popover) return false;
+        if (persistDropdownSearch) {
+          const persisted = getPersistentListFilter() || initialFilter;
+          if (persisted) try { setListFilterValue(popover, persisted); } catch (_) {}
+        } else {
+          try { setListFilterValue(popover, ''); } catch (_) {}
         }
-      }, 100);
+        continue;
+      }
+      return false;
+    }
+
+    try { linkElement.scrollIntoView({ block: 'center' }); } catch(_) {}
+    dispatchMouseSequence(linkElement);
+
+    // If user disabled persistence, clear the filter immediately after click
+    if (!persistDropdownSearch) {
+      try {
+        clearPersistentListFilter();
+        setListFilterValue(popover, '');
+      } catch (_) {}
+    }
+
+    const ok = await waitForAddConfirmation(popover, 1500).catch(() => false);
+    if (ok) {
+      // Success: clear persisted filter only if persistence is disabled
+      if (!persistDropdownSearch) {
+        clearPersistentListFilter();
+      }
+      return true;
+    }
+
+    // If navigation occurred mid-flow, stop retrying to avoid unintended clicks
+    if (asinAtStart && productInfo?.asin && productInfo.asin !== asinAtStart) {
+      return false;
+    }
+
+    // Retry: reopen popover and restore filter before trying again
+    if (attempt < maxAttempts) {
+      await new Promise(r => setTimeout(r, attemptDelayMs));
+      popover = await openListDropdownAndWait().catch(() => null);
+      if (!popover) return false;
+      if (persistDropdownSearch) {
+        const persisted = getPersistentListFilter() || initialFilter;
+        if (persisted) try { setListFilterValue(popover, persisted); } catch (_) {}
+      } else {
+        try { setListFilterValue(popover, ''); } catch (_) {}
+      }
+      try { extractListsFromDropdown(popover); } catch (_) {}
     }
   }
+  return false;
 }
 
-browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+browser.runtime.onMessage.addListener((message, sender) => {
   if (message.type === 'ADD_TO_LIST') {
-    handleAddToListAction(message.listId);
-    sendResponse({ success: true });
+    return (async () => {
+      try {
+        const ok = await handleAddToListAction(message.listId);
+        return { success: !!ok };
+      } catch (e) {
+        return { success: false, error: e?.message || 'ADD_TO_LIST failed' };
+      }
+    })();
   } else if (message.type === 'REQUEST_LISTS') {
-    if (userLists.length === 0) {
-      triggerAddToListPopup();
-    } else {
-      sendListsToSidebar();
-    }
-    sendResponse({ success: true });
+    return (async () => {
+      try {
+        await openListDropdownAndWait();
+        return { success: true, listCount: userLists.length };
+      } catch (e) {
+        // Best effort fallback
+        triggerAddToListPopup();
+        return { success: false, listCount: userLists.length, error: e?.message || 'REQUEST_LISTS failed' };
+      }
+    })();
   }
-  return true;
 });
 
 let currentUrl = window.location.href;
@@ -382,16 +545,18 @@ function watchProductTitle() {
 
 function initialize() {
   if (detectProductPage()) {
+    // load user setting up-front
+    loadPersistSetting();
     productInfo = extractProductInfo();
     addToListButton = findAddToListButton();
     
-    addSidebarToggleButton();
     interceptListData();
     watchProductTitle();
     
     // Send initial product info IMMEDIATELY
     sendProductUpdate(true); // Force initial update - no delay
     
+    try { console.log('[content] Amazon List Sidebar initialized on product page:', window.location.href); } catch(_) {}
   }
 }
 
@@ -468,6 +633,18 @@ document.addEventListener('focusin', () => {
     sendProductUpdate(true);
   }
 });
+
+// Update persist setting live if changed from the sidebar
+try {
+  if (browser && browser.storage && browser.storage.onChanged) {
+    browser.storage.onChanged.addListener((changes, area) => {
+      if (area === 'sync' && changes && changes.persistDropdownSearch) {
+        const nv = changes.persistDropdownSearch.newValue;
+        persistDropdownSearch = (typeof nv === 'boolean') ? nv : true;
+      }
+    });
+  }
+} catch (_) {}
 
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
