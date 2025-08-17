@@ -32,3 +32,6 @@ credentials.json
 
 # Firefox extension development
 .web-extension-id
+
+# Hide TODO
+TODO.md

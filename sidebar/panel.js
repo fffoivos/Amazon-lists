@@ -111,7 +111,9 @@ async function addToList(listId, listName) {
   showStatus(`Adding to "${listName}"...`, 'loading');
   try {
     const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
-    const resp = await browser.tabs.sendMessage(tabsArr[0].id, {
+    const activeTab = tabsArr && tabsArr[0];
+    if (!activeTab) { showStatus('No active tab', 'error'); return; }
+    const resp = await browser.tabs.sendMessage(activeTab.id, {
       type: 'ADD_TO_LIST',
       listId
     });
@@ -123,7 +125,14 @@ async function addToList(listId, listName) {
     updateRecentListsDisplay();
   } catch (error) {
     console.error('Error adding to list:', error);
-    showStatus(`Failed to add to "${listName}"`, 'error');
+    const msg = (error && (error.message || String(error))) || '';
+    if (/Receiving end does not exist|Could not establish connection/i.test(msg)) {
+      showStatus('Could not connect to Amazon page. Open a product page and try again.', 'error');
+    } else if (msg === 'not_on_product_page') {
+      showStatus('Please open an Amazon product page.', 'info');
+    } else {
+      showStatus(`Failed to add to "${listName}"`, 'error');
+    }
   }
 }
 
@@ -221,20 +230,22 @@ function filterLists(searchTerm) {
 async function requestListsFromContent() {
   try {
     const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
-    if (tabsArr[0] && tabsArr[0].url && tabsArr[0].url.includes('amazon.')) {
-      const resp = await browser.tabs.sendMessage(tabsArr[0].id, { type: 'REQUEST_LISTS' });
-      if (resp && resp.success) {
-        const count = typeof resp.listCount === 'number' ? resp.listCount : (allLists?.length || 0);
-        if (count > 0) {
-          showStatus(`Found ${count} lists`, 'info');
-        } else {
-          showStatus('No lists found yet. Opening dropdown...', 'info');
-        }
+    const activeTab = tabsArr && tabsArr[0];
+    if (!activeTab) { showStatus('No active tab', 'error'); return; }
+    const resp = await browser.tabs.sendMessage(activeTab.id, { type: 'REQUEST_LISTS' });
+    if (resp && resp.success) {
+      const count = typeof resp.listCount === 'number' ? resp.listCount : (allLists?.length || 0);
+      if (count > 0) {
+        showStatus(`Found ${count} lists`, 'info');
+      } else {
+        showStatus('No lists found yet. Opening dropdown...', 'info');
+      }
+    } else {
+      if (resp && resp.error === 'not_on_product_page') {
+        showStatus('Please open an Amazon product page.', 'info');
       } else {
         showStatus('Scanning page for lists...', 'loading');
       }
-    } else {
-      showStatus('Please navigate to an Amazon product page', 'info');
     }
   } catch (error) {
     console.error('Error requesting lists:', error);
@@ -298,8 +309,13 @@ function setupSettingsUI() {
 
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'UPDATE_LISTS') {
+    // Preserve current sidebar search filter across list updates
+    const currentSearch = (elements.searchInput && typeof elements.searchInput.value === 'string')
+      ? elements.searchInput.value
+      : '';
+
     allLists = message.lists || [];
-    filteredLists = allLists;
+    
     
     // Store lists in sync storage for cross-device persistence
     browser.storage.sync.set({ 
@@ -317,7 +333,13 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
       updateProductDisplay(message.productInfo);
     }
     
-    displayLists(filteredLists);
+    if (currentSearch) {
+      // Reapply the user's search to avoid scattered/reset results
+      filterLists(currentSearch);
+    } else {
+      filteredLists = allLists;
+      displayLists(filteredLists);
+    }
     sendResponse({ success: true });
   } else if (message.type === 'UPDATE_PRODUCT') {
     // Handle product-only updates

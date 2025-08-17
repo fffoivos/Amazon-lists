@@ -3,13 +3,36 @@ let userLists = [];
 let addToListButton = null;
 let persistDropdownSearch = true; // default: persist search results after click
 
+// Strict enablement guard: HTTPS, top-level frame, whitelisted amazon TLDs
+function isCertifiedAmazonContext() {
+  try {
+    if (window.top !== window) return false; // top-level only
+    if (location.protocol !== 'https:') return false; // HTTPS only
+    const host = location.hostname.toLowerCase();
+    const allowed = /^(?:[^.]+\.)*amazon\.(com|ca|co\.uk|de|fr|es|it|co\.jp)$/;
+    return allowed.test(host);
+  } catch (_) {
+    return false;
+  }
+}
+const __ALS_ENABLED = isCertifiedAmazonContext();
+
 function detectProductPage() {
-  const isProductPage = 
-    window.location.pathname.includes('/dp/') || 
-    window.location.pathname.includes('/gp/product/') ||
-    document.querySelector('#productTitle') !== null;
-  
-  return isProductPage;
+  const path = window.location.pathname.toLowerCase();
+  const hasPath = /(?:^|\/)(?:dp\/|gp\/product\/|gp\/aw\/d\/)/i.test(path);
+  const hasTitle = document.querySelector('#productTitle') !== null;
+  const hasAsinInput = !!document.querySelector('input#ASIN, input[name="ASIN" i], meta[name="ASIN" i], [data-asin]');
+  let hasCanonical = false;
+  try {
+    const canonHref = document.querySelector('link[rel="canonical"]')?.getAttribute('href') || '';
+    if (canonHref) {
+      const canonPath = new URL(canonHref, location.href).pathname.toLowerCase();
+      hasCanonical = /(?:^|\/)(?:dp\/|gp\/product\/|gp\/aw\/d\/)/i.test(canonPath);
+    }
+  } catch (_) {}
+  const ogType = document.querySelector('meta[property="og:type"]')?.getAttribute('content') || '';
+  const hasOgProduct = /product/i.test(ogType || '');
+  return hasPath || hasTitle || hasAsinInput || hasCanonical || hasOgProduct;
 }
 
 // Load user setting for whether Amazon dropdown search should persist after click
@@ -30,8 +53,17 @@ function extractProductInfo() {
   const titleElement = titleXPath.singleNodeValue || document.querySelector('#productTitle');
   info.title = titleElement ? titleElement.textContent.trim() : 'Unknown Product';
   
-  const asinMatch = window.location.pathname.match(/\/dp\/([A-Z0-9]{10})/);
-  info.asin = asinMatch ? asinMatch[1] : null;
+  const asinMatch = window.location.pathname.match(/(?:\/dp\/|\/gp\/product\/|\/gp\/aw\/d\/)([A-Z0-9]{10})/i);
+  if (asinMatch) {
+    info.asin = asinMatch[1];
+  } else {
+    const asinInput = document.querySelector('input#ASIN, input[name="ASIN" i]');
+    info.asin = asinInput ? asinInput.value : (
+      document.querySelector('meta[name="ASIN" i]')?.content ||
+      document.querySelector('[data-asin]')?.getAttribute('data-asin') ||
+      null
+    );
+  }
   
   // Get price but ensure it's clean
   const priceElement = document.querySelector('.a-price-whole, .a-price-range, .a-price.a-text-price, .a-price-value');
@@ -147,6 +179,9 @@ function clearPersistentListFilter() {
   try { sessionStorage.removeItem('als_list_filter'); } catch (_) {}
 }
 
+// Re-apply the persisted filter after DOM updates to keep results consistent
+// (Removed reapply/stabilize logic to avoid interfering with Amazon's async rendering)
+
 // Helpers: list popover search filter handling
 function findListSearchInput(scopeEl) {
   const pop = (scopeEl && scopeEl.querySelector) ? scopeEl : document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner, .a-dropdown');
@@ -212,11 +247,9 @@ async function openListDropdownAndWait() {
   const popover = await waitForPopoverVisible(5000);
   // Small delay to let content render
   await new Promise(r => setTimeout(r, 100));
-  // Restore any persisted filter if present
-  const persisted = getPersistentListFilter();
-  if (persistDropdownSearch && persisted) {
-    try { setListFilterValue(popover, persisted); } catch (_) {}
-  }
+  // Always clear dropdown filter to avoid coupling sidebar results with Amazon's filter
+  try { clearPersistentListFilter(); } catch (_) {}
+  try { setListFilterValue(popover, ''); } catch (_) {}
   extractListsFromDropdown(popover);
   return popover;
 }
@@ -260,7 +293,7 @@ function interceptListData() {
               node.querySelector?.('.a-popover') ||
               node.querySelector?.('#atwl-popover-inner') ||
               node.querySelector?.('span[id^="atwl-list-name-"]')) {
-            setTimeout(() => extractListsFromDropdown(node), 100);
+            setTimeout(() => { try { extractListsFromDropdown(node); } catch(_) {} }, 100);
           }
         }
       }
@@ -269,7 +302,7 @@ function interceptListData() {
       if (mutation.type === 'attributes' && mutation.attributeName === 'aria-hidden') {
         const target = mutation.target;
         if (target.classList?.contains('a-popover') && target.getAttribute('aria-hidden') === 'false') {
-          setTimeout(() => extractListsFromDropdown(target), 100);
+          setTimeout(() => { try { extractListsFromDropdown(target); } catch(_) {} }, 100);
         }
       }
     }
@@ -355,13 +388,21 @@ function extractListsFromDropdown(container) {
   
   if (lists.length > 0) {
     userLists = lists;
-    sendListsToSidebar();
+    queueSendListsUpdate();
   } else {
   }
 }
 
+let __als_sendListsTimer = null;
+function queueSendListsUpdate(delay = 150) {
+  try { if (__als_sendListsTimer) clearTimeout(__als_sendListsTimer); } catch (_) {}
+  __als_sendListsTimer = setTimeout(() => {
+    __als_sendListsTimer = null;
+    sendListsToSidebar();
+  }, delay);
+}
+
 function sendListsToSidebar() {
-  
   // Create a clean version of lists without DOM elements
   const cleanLists = userLists.map(list => ({
     id: list.id,
@@ -369,7 +410,7 @@ function sendListsToSidebar() {
     privacy: list.privacy
     // Don't include the 'element' property as it can't be serialized
   }));
-  
+
   browser.runtime.sendMessage({
     type: 'UPDATE_LISTS',
     lists: cleanLists,
@@ -505,6 +546,9 @@ browser.runtime.onMessage.addListener((message, sender) => {
   if (message.type === 'ADD_TO_LIST') {
     return (async () => {
       try {
+        if (!detectProductPage()) {
+          return { success: false, error: 'not_on_product_page' };
+        }
         const ok = await handleAddToListAction(message.listId);
         return { success: !!ok };
       } catch (e) {
@@ -514,6 +558,9 @@ browser.runtime.onMessage.addListener((message, sender) => {
   } else if (message.type === 'REQUEST_LISTS') {
     return (async () => {
       try {
+        if (!detectProductPage()) {
+          return { success: false, listCount: userLists.length, error: 'not_on_product_page' };
+        }
         await openListDropdownAndWait();
         return { success: true, listCount: userLists.length };
       } catch (e) {
@@ -544,6 +591,7 @@ function watchProductTitle() {
 }
 
 function initialize() {
+  if (!__ALS_ENABLED) { return; }
   if (detectProductPage()) {
     // load user setting up-front
     loadPersistSetting();
@@ -562,6 +610,7 @@ function initialize() {
 
 // Watch for URL changes (single-page navigation) - OPTIMIZED
 function watchForUrlChanges() {
+  if (!__ALS_ENABLED) return;
   let updateTimer = null;
   
   // Method 1: Listen for popstate (back/forward navigation)
@@ -573,7 +622,7 @@ function watchForUrlChanges() {
   
   // Method 2: Intercept clicks on product links - INSTANT
   document.addEventListener('click', (e) => {
-    const link = e.target.closest('a[href*="/dp/"], a[href*="/gp/product/"]');
+    const link = e.target.closest('a[href*="/dp/"], a[href*="/gp/product/"], a[href*="/gp/aw/d/"]');
     if (link && link.href) {
       // Clear any pending update
       if (updateTimer) clearTimeout(updateTimer);
@@ -608,31 +657,33 @@ function watchForUrlChanges() {
   }, 100); // Check every 100ms for faster response
 }
 
-// Watch for tab visibility changes - IMMEDIATE UPDATE
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && detectProductPage()) {
-    // Extract fresh info immediately
-    productInfo = extractProductInfo();
-    sendProductUpdate(true); // Force update
-  }
-});
+// Watch for tab visibility/focus changes - gated to certified contexts
+if (__ALS_ENABLED) {
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && detectProductPage()) {
+      // Extract fresh info immediately
+      productInfo = extractProductInfo();
+      sendProductUpdate(true); // Force update
+    }
+  });
 
-// Also listen for focus events as backup - IMMEDIATE UPDATE
-window.addEventListener('focus', () => {
-  if (detectProductPage()) {
-    // Extract fresh info immediately
-    productInfo = extractProductInfo();
-    sendProductUpdate(true); // Force update
-  }
-});
+  // Also listen for focus events as backup - IMMEDIATE UPDATE
+  window.addEventListener('focus', () => {
+    if (detectProductPage()) {
+      // Extract fresh info immediately
+      productInfo = extractProductInfo();
+      sendProductUpdate(true); // Force update
+    }
+  });
 
-// Also update when page gains focus through any means
-document.addEventListener('focusin', () => {
-  if (detectProductPage()) {
-    productInfo = extractProductInfo();
-    sendProductUpdate(true);
-  }
-});
+  // Also update when page gains focus through any means
+  document.addEventListener('focusin', () => {
+    if (detectProductPage()) {
+      productInfo = extractProductInfo();
+      sendProductUpdate(true);
+    }
+  });
+}
 
 // Update persist setting live if changed from the sidebar
 try {

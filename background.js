@@ -4,6 +4,16 @@ let storedProductInfo = null;
 try { console.log('[bg] Background script loaded'); } catch(_) {}
 
 browser.runtime.onMessage.addListener((message, sender) => {
+  // Privacy: gate messages to Amazon tabs or our extension pages
+  const __fromExtension = (function() {
+    try { const base = browser.runtime.getURL(''); return !!(sender && sender.url && sender.url.startsWith(base)); } catch(_) { return false; }
+  })();
+  const __fromAmazon = !!(sender && sender.tab && sender.tab.url && (function(u){ try{ const url=new URL(u); return /(^|\.)amazon\./i.test(url.hostname); }catch(_){ return false; } })(sender.tab.url));
+  if (message && (message.type === 'UPDATE_LISTS' || message.type === 'UPDATE_PRODUCT' || message.type === 'GET_STORED_LISTS' || message.type === 'OPEN_SIDEBAR')) {
+    if (!__fromExtension && !__fromAmazon) {
+      return Promise.resolve({ success: false, error: 'unauthorized_origin' });
+    }
+  }
   if (message.type === 'OPEN_SIDEBAR') {
     console.log('[bg] OPEN_SIDEBAR', { fromTabId: sender.tab && sender.tab.id, windowId: sender.tab && sender.tab.windowId });
     if (!browser.sidebarAction || typeof browser.sidebarAction.open !== 'function') {
