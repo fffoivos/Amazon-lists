@@ -35,7 +35,11 @@ credentials.json
 
 # Documentation (kept locally)
 docs/
-*.md
+README.md
+TODO.md
+CLAUDE.md
+# Keep test documentation
+!test-create-list.md
 
 # Backup files
 backup/

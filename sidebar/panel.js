@@ -223,7 +223,13 @@ class SidebarController {
       noRecent: document.getElementById('no-recent'),
       settingsBtn: document.getElementById('settings-btn'),
       settingsPanel: document.getElementById('settings-panel'),
-      persistToggle: document.getElementById('persist-search-toggle')
+      persistToggle: document.getElementById('persist-search-toggle'),
+      createListBtn: document.getElementById('create-list-btn'),
+      createListForm: document.getElementById('create-list-form'),
+      newListName: document.getElementById('new-list-name'),
+      createListSubmit: document.getElementById('create-list-submit'),
+      createListCancel: document.getElementById('create-list-cancel'),
+      duplicateWarning: document.getElementById('duplicate-warning')
     };
   }
 
@@ -366,6 +372,125 @@ class SidebarController {
     // Tab switching
     this.elements.tabAll.addEventListener('click', () => this.switchTab('all'));
     this.elements.tabRecent.addEventListener('click', () => this.switchTab('recent'));
+
+    // Create list button
+    this.elements.createListBtn.addEventListener('click', () => {
+      this.elements.createListBtn.classList.add('hidden');
+      this.elements.createListForm.classList.remove('hidden');
+      this.elements.newListName.focus();
+    });
+
+    // Create list submit
+    this.elements.createListSubmit.addEventListener('click', async () => {
+      const listName = this.elements.newListName.value.trim();
+      if (!listName) {
+        this.feedback.show('Please enter a list name', 'warning');
+        this.elements.newListName.classList.add('input-error');
+        setTimeout(() => {
+          this.elements.newListName.classList.remove('input-error');
+        }, 2000);
+        return;
+      }
+
+      // Check for duplicate list name
+      const duplicateList = this.allLists.find(list => 
+        list.name.toLowerCase() === listName.toLowerCase()
+      );
+      
+      if (duplicateList) {
+        this.feedback.show(`A list named "${duplicateList.name}" already exists`, 'error');
+        this.elements.newListName.classList.add('input-error');
+        this.elements.createListForm.classList.add('form-error');
+        
+        // Remove error styling after 3 seconds
+        setTimeout(() => {
+          this.elements.newListName.classList.remove('input-error');
+          this.elements.createListForm.classList.remove('form-error');
+        }, 3000);
+        return;
+      }
+
+      // Disable form during creation
+      this.elements.createListSubmit.disabled = true;
+      this.elements.createListCancel.disabled = true;
+      this.elements.newListName.disabled = true;
+      
+      this.feedback.show('Creating list...', 'loading');
+
+      try {
+        // Send message to content script to create the list
+        const tabs = await browser.tabs.query({ active: true, currentWindow: true });
+        const response = await browser.tabs.sendMessage(tabs[0].id, {
+          type: 'CREATE_LIST',
+          listName: listName
+        });
+
+        if (response && response.success) {
+          this.feedback.show(`List "${listName}" created successfully!`, 'success');
+          
+          // Reset form
+          this.elements.newListName.value = '';
+          this.elements.createListForm.classList.add('hidden');
+          this.elements.createListBtn.classList.remove('hidden');
+          
+          // Request updated lists
+          setTimeout(() => {
+            this.requestListsFromContent();
+          }, 500);
+        } else {
+          throw new Error(response?.error || 'Failed to create list');
+        }
+      } catch (error) {
+        console.error('Create list error:', error);
+        this.feedback.show('Failed to create list. Please try again.', 'error');
+      } finally {
+        // Re-enable form
+        this.elements.createListSubmit.disabled = false;
+        this.elements.createListCancel.disabled = false;
+        this.elements.newListName.disabled = false;
+      }
+    });
+
+    // Create list cancel
+    this.elements.createListCancel.addEventListener('click', () => {
+      this.elements.newListName.value = '';
+      this.elements.newListName.classList.remove('input-error', 'input-warning');
+      this.elements.createListForm.classList.remove('form-error');
+      this.elements.duplicateWarning.classList.add('hidden');
+      this.elements.createListForm.classList.add('hidden');
+      this.elements.createListBtn.classList.remove('hidden');
+    });
+
+    // Enter key to submit
+    this.elements.newListName.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        this.elements.createListSubmit.click();
+      }
+    });
+
+    // Real-time validation as user types
+    this.elements.newListName.addEventListener('input', (e) => {
+      const listName = e.target.value.trim();
+      
+      // Remove any existing error states
+      this.elements.newListName.classList.remove('input-error', 'input-warning');
+      this.elements.createListForm.classList.remove('form-error');
+      this.elements.duplicateWarning.classList.add('hidden');
+      
+      if (listName) {
+        // Check for duplicate
+        const duplicateList = this.allLists.find(list => 
+          list.name.toLowerCase() === listName.toLowerCase()
+        );
+        
+        if (duplicateList) {
+          this.elements.newListName.classList.add('input-warning');
+          this.elements.duplicateWarning.classList.remove('hidden');
+          this.elements.duplicateWarning.querySelector('.warning-text').textContent = 
+            `⚠️ List "${duplicateList.name}" already exists`;
+        }
+      }
+    });
   }
 
   setupMessageListeners() {

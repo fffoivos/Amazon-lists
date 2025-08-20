@@ -158,6 +158,142 @@ header h1 {
   background: white;
 }
 
+/* Create list container */
+#create-list-container {
+  padding: 10px 12px;
+  background: white;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.create-button {
+  width: 100%;
+  padding: 10px;
+  background: #ff9900;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background-color 0.2s;
+}
+
+.create-button:hover {
+  background: #e88b00;
+}
+
+.plus-icon {
+  font-size: 18px;
+  font-weight: bold;
+}
+
+#create-list-form {
+  margin-top: 10px;
+}
+
+#new-list-name {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+
+#new-list-name:focus {
+  outline: none;
+  border-color: #666;
+}
+
+.create-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn-primary,
+.btn-secondary {
+  flex: 1;
+  padding: 8px;
+  border: none;
+  border-radius: 4px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-primary {
+  background: #ff9900;
+  color: white;
+  font-weight: 500;
+}
+
+.btn-primary:hover {
+  background: #e88b00;
+}
+
+.btn-secondary {
+  background: #e3e3e3;
+  color: #333;
+}
+
+.btn-secondary:hover {
+  background: #d0d0d0;
+}
+
+/* Error and warning states for create list form */
+.input-error {
+  border-color: #d32f2f !important;
+  background-color: #ffebee !important;
+  animation: shake 0.3s ease-in-out;
+}
+
+.input-warning {
+  border-color: #f57c00 !important;
+  background-color: #fff3e0 !important;
+}
+
+.form-error {
+  padding: 8px;
+  margin: -8px;
+  background-color: #ffebee;
+  border-radius: 4px;
+  animation: shake 0.3s ease-in-out;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-5px); }
+  75% { transform: translateX(5px); }
+}
+
+#new-list-name.input-error:focus,
+#new-list-name.input-warning:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(211, 47, 47, 0.2);
+}
+
+#new-list-name.input-warning:focus {
+  box-shadow: 0 0 0 2px rgba(245, 124, 0, 0.2);
+}
+
+/* Duplicate warning text */
+#duplicate-warning {
+  margin-top: 4px;
+  margin-bottom: -4px;
+}
+
+.warning-text {
+  color: #f57c00;
+  font-size: 11px;
+  display: block;
+  padding: 2px 0;
+}
+
 #search-container {
   padding: 12px;
   background: white;

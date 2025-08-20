@@ -25,6 +25,28 @@
       <button id="tab-recent" class="tab-button">Recent</button>
     </div>
     
+    <div id="create-list-container">
+      <button id="create-list-btn" class="create-button">
+        <span class="plus-icon">+</span> Create New List
+      </button>
+      <div id="create-list-form" class="hidden">
+        <input 
+          type="text" 
+          id="new-list-name" 
+          placeholder="Enter list name..."
+          autocomplete="off"
+          maxlength="50"
+        >
+        <div id="duplicate-warning" class="hidden">
+          <small class="warning-text">⚠️ This list name already exists</small>
+        </div>
+        <div class="create-actions">
+          <button id="create-list-submit" class="btn-primary">Create</button>
+          <button id="create-list-cancel" class="btn-secondary">Cancel</button>
+        </div>
+      </div>
+    </div>
+    
     <div id="search-container">
       <input 
         type="text" 

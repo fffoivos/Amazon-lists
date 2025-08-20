@@ -18,7 +18,8 @@ const CONFIG = {
     SELECTORS: {
       PRODUCT_TITLE: ['xpath://*[@id="productTitle"]', '#productTitle'],
       ADD_TO_LIST_BUTTON: ['#add-to-wishlist-button', 'a[data-action="a-dropdown-button"]', 'span[data-action="a-dropdown-button"]', '.a-button-dropdown'],
-      LIST_POPOVER: ['.a-popover[aria-hidden="false"]', '#atwl-popover-inner', '.a-dropdown']
+      LIST_POPOVER: ['.a-popover[aria-hidden="false"]', '#atwl-popover-inner', '.a-dropdown'],
+      CREATE_LIST_MODAL: ['.a-popover-modal[aria-label*="Create a new list"]', '.a-popover-modal']
     },
     TIMING: {
       POPOVER_WAIT_TIMEOUT_MS: 5000,
@@ -327,19 +328,50 @@ class AmazonListSidebarContent {
     return this.elementFinder.find('ADD_TO_LIST_BUTTON');
   }
 
-  async openListDropdownAndWait() {
+  async openListDropdownAndWait(forceNew = false) {
     const existing = document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner');
-    if (existing) return existing;
+    if (existing && !forceNew) return existing;
+    
+    // If forceNew and there's an existing dropdown, close it first
+    if (existing && forceNew) {
+      document.body.click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await new Promise(r => setTimeout(r, 300));
+    }
 
     const btn = this.findAddToListButton();
     if (!btn) throw new Error('Add-to-list dropdown button not found');
     
-    this.eventSimulator.click(btn);
+    // Click the button repeatedly until dropdown appears
+    let popover = null;
+    const maxClickAttempts = 10;
+    const startTime = Date.now();
+    const timeout = CONFIG.INTERACTION.TIMING.POPOVER_WAIT_TIMEOUT_MS;
     
-    const popover = await this.elementFinder.waitFor('LIST_POPOVER', {
-      timeout: CONFIG.INTERACTION.TIMING.POPOVER_WAIT_TIMEOUT_MS,
-      condition: (el) => el.getAttribute('aria-hidden') !== 'true'
-    });
+    for (let i = 0; i < maxClickAttempts; i++) {
+      this.eventSimulator.click(btn);
+      
+      // Small delay between clicks
+      await new Promise(r => setTimeout(r, 200));
+      
+      // Check if popover appeared
+      popover = document.querySelector('.a-popover[aria-hidden="false"]') ||
+                document.querySelector('#atwl-popover-inner') ||
+                document.querySelector('.a-dropdown[aria-hidden="false"]');
+      
+      if (popover) {
+        break;
+      }
+      
+      // Check timeout
+      if (Date.now() - startTime > timeout) {
+        throw new Error('Timeout waiting for dropdown to open');
+      }
+    }
+    
+    if (!popover) {
+      throw new Error('Dropdown did not open after multiple attempts');
+    }
     
     await new Promise(r => setTimeout(r, 100));
     this.filterPersistence.clear();
@@ -572,6 +604,133 @@ class AmazonListSidebarContent {
       this.persistDropdownSearch = true;
     }
   }
+
+  async createNewList(listName) {
+    return await this.retryManager.retry(async (attempt) => {
+      // Close any existing dropdown first to get a fresh one
+      const existingDropdown = document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner');
+      if (existingDropdown) {
+        // Try to close it by clicking outside or ESC key
+        document.body.click();
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        await new Promise(r => setTimeout(r, 500));
+      }
+
+      // Now open a fresh dropdown (force new = true to ensure fresh dropdown)
+      const dropdown = await this.openListDropdownAndWait(true);
+      if (!dropdown) {
+        throw new Error('Could not open list dropdown');
+      }
+
+      // Wait a bit for dropdown to fully render
+      await new Promise(r => setTimeout(r, 300));
+
+      // Find the "Create a List" link - search in document, not just dropdown
+      let createLink = document.querySelector('#atwl-dd-create-list');
+      if (!createLink) {
+        // Sometimes the link is outside the main dropdown container
+        createLink = dropdown.querySelector('#atwl-dd-create-list');
+      }
+      if (!createLink) {
+        throw new Error('Could not find Create List link');
+      }
+
+      // Click the create link repeatedly until modal appears
+      let modal = null;
+      const maxClickAttempts = 10;
+      for (let i = 0; i < maxClickAttempts; i++) {
+        this.eventSimulator.click(createLink);
+        
+        // Small delay between clicks
+        await new Promise(r => setTimeout(r, 200));
+        
+        // Check if modal appeared
+        modal = document.querySelector('.a-popover-modal[aria-label*="Create a new list"]') ||
+                document.querySelector('.a-popover-modal');
+        
+        if (modal && modal.getAttribute('aria-hidden') !== 'true') {
+          break;
+        }
+      }
+
+      if (!modal || modal.getAttribute('aria-hidden') === 'true') {
+        throw new Error('Create list modal did not appear after multiple attempts');
+      }
+
+      // Wait a bit for modal to fully render
+      await new Promise(r => setTimeout(r, 500));
+
+      // Find and set the list name input field with retry
+      const nameInput = modal.querySelector('#list-name');
+      if (!nameInput) {
+        throw new Error('Could not find list name input');
+      }
+
+      // Set the input value with multiple methods to ensure it takes
+      for (let i = 0; i < 3; i++) {
+        nameInput.focus();
+        nameInput.value = '';
+        nameInput.value = listName;
+        
+        // Dispatch multiple events to ensure the value is registered
+        nameInput.dispatchEvent(new Event('focus', { bubbles: true }));
+        nameInput.dispatchEvent(new Event('click', { bubbles: true }));
+        nameInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }));
+        nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+        nameInput.dispatchEvent(new Event('change', { bubbles: true }));
+        nameInput.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }));
+        nameInput.dispatchEvent(new Event('blur', { bubbles: true }));
+        
+        await new Promise(r => setTimeout(r, 100));
+        
+        // Verify the value was set
+        if (nameInput.value === listName) {
+          break;
+        }
+      }
+
+      if (nameInput.value !== listName) {
+        throw new Error('Could not set list name in input field');
+      }
+
+      // Find the create button
+      const createButton = modal.querySelector('#wl-redesigned-create-list .a-button-input') ||
+                          modal.querySelector('.a-button-input[type="submit"]') ||
+                          modal.querySelector('.a-button-primary .a-button-input');
+      
+      if (!createButton) {
+        throw new Error('Could not find create button');
+      }
+
+      // Click the create button only ONCE to avoid creating multiple lists
+      this.eventSimulator.click(createButton);
+
+      // Wait for success confirmation or modal to close
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // Check if modal closed (success indicator)
+      const modalStillOpen = document.querySelector('.a-popover-modal[aria-hidden="false"]');
+      if (modalStillOpen) {
+        // Modal still open might mean error or still processing
+        await new Promise(resolve => setTimeout(resolve, 2000));
+      }
+
+      // Extract lists again to get the new list
+      const popover = document.querySelector('.a-popover[aria-hidden="false"]') || 
+                      document.querySelector('#atwl-popover-inner');
+      if (popover) {
+        this.extractListsFromDropdown(popover);
+      }
+
+      return { success: true, listName: listName };
+    }, {
+      maxAttempts: 3,
+      baseDelay: 1000
+    }).catch(error => {
+      console.error('Failed to create list after retries:', error);
+      return { success: false, error: error.message };
+    });
+  }
 }
 
 // Message listener
@@ -598,6 +757,18 @@ browser.runtime.onMessage.addListener((message, sender) => {
         return { success: true, listCount: contentScript.userLists.length };
       } catch (e) {
         return { success: false, listCount: contentScript.userLists.length, error: e?.message || 'REQUEST_LISTS failed' };
+      }
+    })();
+  } else if (message.type === 'CREATE_LIST') {
+    return (async () => {
+      try {
+        if (!contentScript.detectProductPage()) {
+          return { success: false, error: 'not_on_product_page' };
+        }
+        const result = await contentScript.createNewList(message.listName);
+        return result;
+      } catch (e) {
+        return { success: false, error: e?.message || 'CREATE_LIST failed' };
       }
     })();
   }

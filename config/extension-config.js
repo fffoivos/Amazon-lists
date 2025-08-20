@@ -24,7 +24,8 @@ const CONFIG = {
       'GET_STORED_LISTS',
       'ADD_TO_LIST',
       'REQUEST_LISTS',
-      'OPEN_SIDEBAR'
+      'OPEN_SIDEBAR',
+      'CREATE_LIST'
     ],
     STRIP_DOM_REFERENCES: true,
     MAX_STRING_LENGTH: 1000
@@ -77,7 +78,12 @@ const CONFIG = {
         'span[id^="atwl-list-name-"]'
       ],
       LIST_LINK_PREFIX: '#atwl-link-to-list-',
-      LIST_PRIVACY_PREFIX: '#atwl-list-privacy-'
+      LIST_PRIVACY_PREFIX: '#atwl-list-privacy-',
+      CREATE_LIST_LINK: '#atwl-dd-create-list',
+      CREATE_LIST_MODAL: '.a-popover-modal[aria-label*="Create a new list"]',
+      LIST_NAME_INPUT: '#list-name',
+      CREATE_BUTTON: '#wl-redesigned-create-list .a-button-input',
+      CREATE_SUCCESS_MESSAGE: '#wl-huc-post-create-msg'
     },
     
     // Timing configuration
@@ -86,7 +92,9 @@ const CONFIG = {
       POPOVER_WAIT_TIMEOUT_MS: 5000,
       CONFIRMATION_WAIT_TIMEOUT_MS: 1500,
       POPOVER_RENDER_DELAY_MS: 100,
-      MUTATION_DEBOUNCE_MS: 100
+      MUTATION_DEBOUNCE_MS: 100,
+      CREATE_MODAL_WAIT_MS: 3000,
+      CREATE_CONFIRMATION_WAIT_MS: 5000
     },
     
     // Event simulation
