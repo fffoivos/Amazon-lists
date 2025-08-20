@@ -33,5 +33,29 @@ credentials.json
 # Firefox extension development
 .web-extension-id
 
-# Hide TODO
-TODO.md
+# Documentation (kept locally)
+docs/
+*.md
+
+# Backup files
+backup/
+*-original.js
+*-enhanced.js
+
+# Test files
+test/
+*-debug.js
+*-test.js
+minimal-test.html
+
+# Scripts
+scripts/
+*.sh
+
+# Debug files
+debug-diagnostic.js
+log-collector.js
+
+# Log files
+*.log
+mcp-shell.log

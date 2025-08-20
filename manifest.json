@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Amazon List Sidebar",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Display Amazon lists in a sidebar for easier management",
   "browser_specific_settings": {
     "gecko": {

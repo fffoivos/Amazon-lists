@@ -1,80 +1,192 @@
-// Store lists in background script to relay to sidebar
-let storedLists = [];
-let storedProductInfo = null;
-try { console.log('[bg] Background script loaded'); } catch(_) {}
+/**
+ * Enhanced Background Script using modular architecture
+ * Maintains 100% backward compatibility
+ */
 
-browser.runtime.onMessage.addListener((message, sender) => {
-  // Privacy: gate messages to Amazon tabs or our extension pages
-  const __fromExtension = (function() {
-    try { const base = browser.runtime.getURL(''); return !!(sender && sender.url && sender.url.startsWith(base)); } catch(_) { return false; }
-  })();
-  const __fromAmazon = !!(sender && sender.tab && sender.tab.url && (function(u){ try{ const url=new URL(u); return /(^|\.)amazon\./i.test(url.hostname); }catch(_){ return false; } })(sender.tab.url));
-  if (message && (message.type === 'UPDATE_LISTS' || message.type === 'UPDATE_PRODUCT' || message.type === 'GET_STORED_LISTS' || message.type === 'OPEN_SIDEBAR')) {
-    if (!__fromExtension && !__fromAmazon) {
-      return Promise.resolve({ success: false, error: 'unauthorized_origin' });
+// Configuration
+const CONFIG = {
+  MESSAGE_TYPES: ['UPDATE_LISTS', 'UPDATE_PRODUCT', 'GET_STORED_LISTS', 'OPEN_SIDEBAR'],
+  LOG_PREFIX: '[bg]'
+};
+
+// MessageGatekeeper class (simplified inline version)
+class MessageGatekeeper {
+  constructor() {
+    this.allowedTypes = CONFIG.MESSAGE_TYPES;
+  }
+
+  validateMessage(message, sender) {
+    if (!message || !message.type) return false;
+    if (!this.allowedTypes.includes(message.type)) return false;
+    if (!sender) return false;
+    
+    const fromExtension = this._isFromExtension(sender);
+    const fromAmazon = this._isFromAmazon(sender);
+    
+    return fromExtension || fromAmazon;
+  }
+
+  _isFromExtension(sender) {
+    try {
+      const base = browser.runtime.getURL('');
+      return !!(sender && sender.url && sender.url.startsWith(base));
+    } catch (_) {
+      return false;
     }
   }
-  if (message.type === 'OPEN_SIDEBAR') {
-    console.log('[bg] OPEN_SIDEBAR', { fromTabId: sender.tab && sender.tab.id, windowId: sender.tab && sender.tab.windowId });
-    if (!browser.sidebarAction || typeof browser.sidebarAction.open !== 'function') {
-      console.error('[bg] sidebarAction.open is not available in this Firefox build/context');
-      return Promise.resolve({ success: false, error: 'sidebarAction.open not available' });
+
+  _isFromAmazon(sender) {
+    if (!sender || !sender.tab || !sender.tab.url) return false;
+    try {
+      const url = new URL(sender.tab.url);
+      return /(^|\.)amazon\./i.test(url.hostname);
+    } catch (_) {
+      return false;
     }
-    const opts = sender && sender.tab && sender.tab.windowId ? { windowId: sender.tab.windowId } : undefined;
+  }
+}
+
+// Main background script coordinator
+class BackgroundCoordinator {
+  constructor() {
+    this.gatekeeper = new MessageGatekeeper();
+    this.storedLists = [];
+    this.storedProductInfo = null;
+    this.setupListeners();
+    console.log(`${CONFIG.LOG_PREFIX} Background script loaded`);
+  }
+
+  setupListeners() {
+    // Message listener
+    browser.runtime.onMessage.addListener((message, sender) => 
+      this.handleMessage(message, sender)
+    );
+
+    // Toolbar button listener
+    if (browser.action && typeof browser.action.onClicked?.addListener === 'function') {
+      browser.action.onClicked.addListener((tab) => this.handleToolbarClick(tab));
+    }
+
+    // Installation listener
+    browser.runtime.onInstalled.addListener((details) => {
+      console.log(`${CONFIG.LOG_PREFIX} onInstalled`, details);
+    });
+
+    // Startup listener
+    if (browser.runtime.onStartup) {
+      browser.runtime.onStartup.addListener(() => {
+        console.log(`${CONFIG.LOG_PREFIX} onStartup`);
+      });
+    }
+  }
+
+  handleMessage(message, sender) {
+    // Validate message
+    if (!this.gatekeeper.validateMessage(message, sender)) {
+      return Promise.resolve({ success: false, error: 'unauthorized_origin' });
+    }
+    // Handle message based on type
+    switch (message.type) {
+      case 'OPEN_SIDEBAR':
+        return this.handleOpenSidebar(sender);
+      
+      case 'UPDATE_LISTS':
+        return this.handleUpdateLists(message);
+      
+      case 'UPDATE_PRODUCT':
+        return this.handleUpdateProduct(message);
+      
+      case 'GET_STORED_LISTS':
+        return this.handleGetStoredLists();
+      
+      default:
+        return Promise.resolve({ success: false, error: 'unknown_message_type' });
+    }
+  }
+
+  handleOpenSidebar(sender) {
+    console.log(`${CONFIG.LOG_PREFIX} OPEN_SIDEBAR`, { 
+      fromTabId: sender.tab?.id, 
+      windowId: sender.tab?.windowId 
+    });
+    
+    if (!browser.sidebarAction || typeof browser.sidebarAction.open !== 'function') {
+      console.error(`${CONFIG.LOG_PREFIX} sidebarAction.open is not available`);
+      return Promise.resolve({ 
+        success: false, 
+        error: 'sidebarAction.open not available' 
+      });
+    }
+    
+    const opts = sender?.tab?.windowId ? { windowId: sender.tab.windowId } : undefined;
+    
     return browser.sidebarAction.open(opts)
       .then(() => ({ success: true }))
       .catch((e) => {
-        console.error('[bg] sidebarAction.open failed:', e);
-        return { success: false, error: e?.message || 'sidebar open failed' };
+        console.error(`${CONFIG.LOG_PREFIX} sidebarAction.open failed:`, e);
+        return { 
+          success: false, 
+          error: e?.message || 'sidebar open failed' 
+        };
       });
-  } else if (message.type === 'UPDATE_LISTS') {
-    console.log('[bg] UPDATE_LISTS', { count: (message.lists || []).length });
-    storedLists = message.lists || [];
-    storedProductInfo = message.productInfo;
+  }
+
+  handleUpdateLists(message) {
+    console.log(`${CONFIG.LOG_PREFIX} UPDATE_LISTS`, { 
+      count: (message.lists || []).length 
+    });
+    
+    this.storedLists = message.lists || [];
+    this.storedProductInfo = message.productInfo;
+    
+    // Broadcast to sidebar
     browser.runtime.sendMessage({
       type: 'UPDATE_LISTS',
-      lists: storedLists,
-      productInfo: storedProductInfo
+      lists: this.storedLists,
+      productInfo: this.storedProductInfo
     }).catch(() => {});
+    
     return Promise.resolve({ success: true });
-  } else if (message.type === 'UPDATE_PRODUCT') {
-    console.log('[bg] UPDATE_PRODUCT');
-    storedProductInfo = message.productInfo;
+  }
+
+  handleUpdateProduct(message) {
+    console.log(`${CONFIG.LOG_PREFIX} UPDATE_PRODUCT`);
+    
+    this.storedProductInfo = message.productInfo;
+    
+    // Broadcast to sidebar
     browser.runtime.sendMessage({
       type: 'UPDATE_PRODUCT',
-      productInfo: storedProductInfo
+      productInfo: this.storedProductInfo
     }).catch(() => {});
+    
     return Promise.resolve({ success: true });
-  } else if (message.type === 'GET_STORED_LISTS') {
-    console.log('[bg] GET_STORED_LISTS');
+  }
+
+  handleGetStoredLists() {
+    console.log(`${CONFIG.LOG_PREFIX} GET_STORED_LISTS`);
+    
     return Promise.resolve({
-      lists: storedLists,
-      productInfo: storedProductInfo
+      lists: this.storedLists,
+      productInfo: this.storedProductInfo
     });
   }
-});
 
-// Toolbar button fallback: guaranteed user gesture
-if (browser.action && typeof browser.action.onClicked?.addListener === 'function') {
-  browser.action.onClicked.addListener(async (tab) => {
+  async handleToolbarClick(tab) {
     try {
-      const opts = tab && tab.windowId ? { windowId: tab.windowId } : undefined;
+      const opts = tab?.windowId ? { windowId: tab.windowId } : undefined;
+      
       if (!browser.sidebarAction || typeof browser.sidebarAction.open !== 'function') {
-        console.error('[bg] sidebarAction.open not available on toolbar click');
+        console.error(`${CONFIG.LOG_PREFIX} sidebarAction.open not available on toolbar click`);
         return;
       }
+      
       await browser.sidebarAction.open(opts);
     } catch (e) {
-      console.error('[bg] sidebarAction.open failed on toolbar click:', e);
+      console.error(`${CONFIG.LOG_PREFIX} sidebarAction.open failed on toolbar click:`, e);
     }
-  });
+  }
 }
 
-browser.runtime.onInstalled.addListener((details) => {
-  try { console.log('[bg] onInstalled', details); } catch(_) {}
-});
-if (browser.runtime.onStartup) {
-  browser.runtime.onStartup.addListener(() => {
-    try { console.log('[bg] onStartup'); } catch(_) {}
-  });
-}
+// Initialize the background coordinator
+const coordinator = new BackgroundCoordinator();

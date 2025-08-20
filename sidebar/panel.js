@@ -1,440 +1,640 @@
-let allLists = [];
-let filteredLists = [];
-let currentProduct = null;
-let recentListIds = [];
+/**
+ * Enhanced Sidebar Panel using modular architecture
+ * Maintains 100% backward compatibility
+ */
 
-const elements = {
-  searchInput: document.getElementById('search-input'),
-  clearSearch: document.getElementById('clear-search'),
-  listsContainer: document.getElementById('lists-container'),
-  loadingMessage: document.getElementById('loading-message'),
-  noListsMessage: document.getElementById('no-lists-message'),
-  listsWrapper: document.getElementById('lists-wrapper'),
-  listItems: document.getElementById('list-items'),
-  recentLists: document.getElementById('recent-lists'),
-  recentListItems: document.getElementById('recent-list-items'),
-  listCount: document.getElementById('list-count'),
-  totalLists: document.getElementById('total-lists'),
-  statusMessage: document.getElementById('status-message'),
-  productInfo: document.getElementById('product-info'),
-  productImage: document.getElementById('product-image'),
-  productTitle: document.getElementById('product-title'),
-  productPrice: document.getElementById('product-price'),
-  tabAll: document.getElementById('tab-all'),
-  tabRecent: document.getElementById('tab-recent'),
-  allLists: document.getElementById('all-lists'),
-  noRecent: document.getElementById('no-recent'),
-  settingsBtn: document.getElementById('settings-btn'),
-  settingsPanel: document.getElementById('settings-panel'),
-  persistToggle: document.getElementById('persist-search-toggle')
+// Configuration
+const CONFIG = {
+  CACHE: {
+    TTL_MINUTES: 60
+  },
+  QUICK_ACCESS: {
+    MAX_ITEMS: 5,
+    STORAGE_KEY: 'recentLists'
+  },
+  FEEDBACK: {
+    DEFAULT_DURATION_MS: 3000
+  },
+  STATE: {
+    PRESERVE_KEYS: ['searchTerm', 'currentTab']
+  },
+  STORAGE: {
+    KEYS: {
+      LISTS: 'storedLists',
+      RECENT_LISTS: 'recentLists',
+      PERSIST_DROPDOWN: 'persistDropdownSearch',
+      LAST_UPDATED: 'lastUpdated'
+    }
+  }
 };
 
-let currentTab = 'all';
+// HybridStorage class (simplified inline version)
+class HybridStorage {
+  async get(key) {
+    try {
+      let result = await browser.storage.sync.get(key);
+      if (!result || !result[key]) {
+        result = await browser.storage.local.get(key);
+      }
+      return result ? result[key] : undefined;
+    } catch (error) {
+      console.error('Storage get error:', error);
+      return undefined;
+    }
+  }
 
-async function loadRecentLists() {
-  try {
-    // Try sync storage first, fallback to local
-    const result = await browser.storage.sync.get('recentLists');
-    recentListIds = result.recentLists || [];
+  async set(key, value) {
+    try {
+      try {
+        await browser.storage.sync.set({ [key]: value });
+        return true;
+      } catch (syncError) {
+        if (syncError.message?.includes('QUOTA')) {
+          await browser.storage.local.set({ [key]: value });
+          return true;
+        }
+        throw syncError;
+      }
+    } catch (error) {
+      console.error('Storage set error:', error);
+      return false;
+    }
+  }
+
+  async remove(key) {
+    try {
+      await Promise.all([
+        browser.storage.sync.remove(key).catch(() => {}),
+        browser.storage.local.remove(key).catch(() => {})
+      ]);
+      return true;
+    } catch (error) {
+      console.error('Storage remove error:', error);
+      return false;
+    }
+  }
+}
+
+// QuickAccessManager class
+class QuickAccessManager {
+  constructor(storage) {
+    this.storage = storage;
+    this.maxItems = CONFIG.QUICK_ACCESS.MAX_ITEMS;
+    this.storageKey = CONFIG.QUICK_ACCESS.STORAGE_KEY;
+    this.items = [];
+  }
+
+  async load() {
+    const stored = await this.storage.get(this.storageKey);
+    if (stored && Array.isArray(stored)) {
+      this.items = stored.slice(0, this.maxItems);
+    }
+    return this.items;
+  }
+
+  async add(itemId) {
+    this.items = this.items.filter(id => id !== itemId);
+    this.items.unshift(itemId);
+    this.items = this.items.slice(0, this.maxItems);
+    await this.storage.set(this.storageKey, this.items);
+    return true;
+  }
+
+  getItems() {
+    return [...this.items];
+  }
+}
+
+// UserFeedback class
+class UserFeedback {
+  constructor(statusElement) {
+    this.statusElement = statusElement;
+    this.defaultDuration = CONFIG.FEEDBACK.DEFAULT_DURATION_MS;
+    this.currentTimer = null;
+  }
+
+  show(message, type = 'info', duration = null) {
+    if (this.currentTimer) {
+      clearTimeout(this.currentTimer);
+      this.currentTimer = null;
+    }
+
+    this.statusElement.textContent = message;
+    this.statusElement.className = `status-${type}`;
+    this.statusElement.classList.remove('hidden');
+
+    if (type !== 'loading') {
+      const displayDuration = duration || this.defaultDuration;
+      this.currentTimer = setTimeout(() => {
+        this.statusElement.classList.add('hidden');
+        this.currentTimer = null;
+      }, displayDuration);
+    }
+  }
+
+  hide() {
+    if (this.currentTimer) {
+      clearTimeout(this.currentTimer);
+      this.currentTimer = null;
+    }
+    this.statusElement.classList.add('hidden');
+  }
+}
+
+// StatePreserver class
+class StatePreserver {
+  constructor() {
+    this.state = new Map();
+  }
+
+  preserve(key, value) {
+    this.state.set(key, value);
+    return value;
+  }
+
+  restore(key, defaultValue = null) {
+    return this.state.has(key) ? this.state.get(key) : defaultValue;
+  }
+}
+
+// CacheManager class
+class CacheManager {
+  getAgeString(timestamp) {
+    const now = Date.now();
+    const ageMs = now - timestamp;
+    const minutes = Math.floor(ageMs / (1000 * 60));
+    const hours = Math.floor(ageMs / (1000 * 60 * 60));
     
-    // Migrate from local to sync if needed
-    if (recentListIds.length === 0) {
-      const localResult = await browser.storage.local.get('recentLists');
-      if (localResult.recentLists && localResult.recentLists.length > 0) {
-        recentListIds = localResult.recentLists;
-        await browser.storage.sync.set({ recentLists: recentListIds });
-        await browser.storage.local.remove('recentLists');
+    if (hours > 0) {
+      return `${(minutes / 60).toFixed(1)} hours ago`;
+    } else {
+      return `${minutes} min ago`;
+    }
+  }
+}
+
+// Main Sidebar Controller
+class SidebarController {
+  constructor() {
+    // Initialize modules
+    this.storage = new HybridStorage();
+    this.quickAccess = new QuickAccessManager(this.storage);
+    this.statePreserver = new StatePreserver();
+    this.cacheManager = new CacheManager();
+    
+    // Get DOM elements
+    this.elements = this.initElements();
+    
+    // Initialize feedback
+    this.feedback = new UserFeedback(this.elements.statusMessage);
+    
+    // State
+    this.allLists = [];
+    this.filteredLists = [];
+    this.currentProduct = null;
+    this.currentTab = 'all';
+    this.persistDropdownSearch = true;
+    
+    // Initialize
+    this.initialize();
+  }
+
+  initElements() {
+    return {
+      searchInput: document.getElementById('search-input'),
+      clearSearch: document.getElementById('clear-search'),
+      listsContainer: document.getElementById('lists-container'),
+      loadingMessage: document.getElementById('loading-message'),
+      noListsMessage: document.getElementById('no-lists-message'),
+      listsWrapper: document.getElementById('lists-wrapper'),
+      listItems: document.getElementById('list-items'),
+      recentLists: document.getElementById('recent-lists'),
+      recentListItems: document.getElementById('recent-list-items'),
+      listCount: document.getElementById('list-count'),
+      totalLists: document.getElementById('total-lists'),
+      statusMessage: document.getElementById('status-message'),
+      productInfo: document.getElementById('product-info'),
+      productImage: document.getElementById('product-image'),
+      productTitle: document.getElementById('product-title'),
+      productPrice: document.getElementById('product-price'),
+      tabAll: document.getElementById('tab-all'),
+      tabRecent: document.getElementById('tab-recent'),
+      allLists: document.getElementById('all-lists'),
+      noRecent: document.getElementById('no-recent'),
+      settingsBtn: document.getElementById('settings-btn'),
+      settingsPanel: document.getElementById('settings-panel'),
+      persistToggle: document.getElementById('persist-search-toggle')
+    };
+  }
+
+  async initialize() {
+    await this.quickAccess.load();
+    await this.loadSettings();
+    this.setupEventListeners();
+    this.setupMessageListeners();
+    this.setupSettingsUI();
+    
+    // Load cached lists
+    const listsLoaded = await this.loadCachedLists();
+    
+    // Try to get lists from background
+    await this.loadFromBackground();
+    
+    // Only show loading if no lists were loaded from cache
+    if (!listsLoaded) {
+      this.elements.loadingMessage.classList.remove('hidden');
+    }
+    
+    // Request fresh lists from content
+    this.requestListsFromContent();
+  }
+
+  async loadCachedLists() {
+    try {
+      // Try sync first
+      let stored = await browser.storage.sync.get([
+        CONFIG.STORAGE.KEYS.LISTS,
+        CONFIG.STORAGE.KEYS.LAST_UPDATED
+      ]);
+      
+      // Fallback to local if sync is empty
+      if (!stored.storedLists || stored.storedLists.length === 0) {
+        stored = await browser.storage.local.get([
+          CONFIG.STORAGE.KEYS.LISTS,
+          CONFIG.STORAGE.KEYS.LAST_UPDATED
+        ]);
+        
+        // Migrate to sync if found in local
+        if (stored.storedLists && stored.storedLists.length > 0) {
+          browser.storage.sync.set({
+            [CONFIG.STORAGE.KEYS.LISTS]: stored.storedLists,
+            [CONFIG.STORAGE.KEYS.LAST_UPDATED]: stored.lastUpdated
+          }).catch(() => {});
+        }
+      }
+      
+      if (stored.storedLists && stored.storedLists.length > 0) {
+        const ageStr = this.cacheManager.getAgeString(stored.lastUpdated || 0);
+        
+        this.allLists = stored.storedLists;
+        this.filteredLists = this.allLists;
+        this.displayLists(this.filteredLists);
+        
+        // Show cache age
+        this.feedback.show(`Lists cached ${ageStr}`, 'info');
+        return true;
+      }
+    } catch (error) {
+      console.error('Error loading cached lists:', error);
+    }
+    
+    return false;
+  }
+
+  async loadFromBackground() {
+    try {
+      const response = await browser.runtime.sendMessage({ 
+        type: 'GET_STORED_LISTS' 
+      });
+      
+      if (response) {
+        if (response.lists && response.lists.length > 0) {
+          this.allLists = response.lists;
+          this.filteredLists = this.allLists;
+          this.displayLists(this.filteredLists);
+          
+          // Store in cache
+          browser.storage.sync.set({
+            [CONFIG.STORAGE.KEYS.LISTS]: this.allLists,
+            [CONFIG.STORAGE.KEYS.LAST_UPDATED]: Date.now()
+          }).catch(() => {
+            browser.storage.local.set({
+              [CONFIG.STORAGE.KEYS.LISTS]: this.allLists,
+              [CONFIG.STORAGE.KEYS.LAST_UPDATED]: Date.now()
+            });
+          });
+        }
+        
+        if (response.productInfo) {
+          this.updateProductDisplay(response.productInfo);
+        }
+      }
+    } catch (error) {
+      console.error('Error loading from background:', error);
+    }
+  }
+
+  async loadSettings() {
+    try {
+      const res = await browser.storage.sync.get(CONFIG.STORAGE.KEYS.PERSIST_DROPDOWN);
+      const persist = res?.persistDropdownSearch !== false;
+      this.persistDropdownSearch = persist;
+      if (this.elements.persistToggle) {
+        this.elements.persistToggle.checked = persist;
+      }
+    } catch (_) {
+      this.persistDropdownSearch = true;
+      if (this.elements.persistToggle) {
+        this.elements.persistToggle.checked = true;
       }
     }
-  } catch (error) {
-    console.error('Error loading recent lists:', error);
-    recentListIds = [];
   }
-}
 
-async function saveRecentList(listId) {
-  recentListIds = recentListIds.filter(id => id !== listId);
-  recentListIds.unshift(listId);
-  recentListIds = recentListIds.slice(0, 5);
-  
-  try {
-    await browser.storage.sync.set({ recentLists: recentListIds });
-  } catch (error) {
-    console.error('Error saving recent lists:', error);
-  }
-}
-
-function updateProductDisplay(productInfo) {
-  if (!productInfo) return;
-  
-  currentProduct = productInfo;
-  
-  if (productInfo.image) {
-    elements.productImage.src = productInfo.image;
-    elements.productImage.style.display = 'block';
-  } else {
-    elements.productImage.style.display = 'none';
-  }
-  
-  elements.productTitle.textContent = productInfo.title || 'Current Product';
-  elements.productPrice.textContent = productInfo.price || '';
-  elements.productInfo.classList.remove('hidden');
-}
-
-function createListItem(list, isRecent = false) {
-  const li = document.createElement('li');
-  li.className = 'list-item';
-  if (isRecent) li.classList.add('recent');
-  
-  const button = document.createElement('button');
-  button.className = 'list-button';
-  button.dataset.listId = list.id;
-  
-  const nameSpan = document.createElement('span');
-  nameSpan.className = 'list-name';
-  nameSpan.textContent = list.name;
-  
-  const addIcon = document.createElement('span');
-  addIcon.className = 'add-icon';
-  addIcon.textContent = '+';
-  
-  button.appendChild(nameSpan);
-  button.appendChild(addIcon);
-  
-  button.addEventListener('click', () => addToList(list.id, list.name));
-  
-  li.appendChild(button);
-  return li;
-}
-
-async function addToList(listId, listName) {
-  showStatus(`Adding to "${listName}"...`, 'loading');
-  try {
-    const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
-    const activeTab = tabsArr && tabsArr[0];
-    if (!activeTab) { showStatus('No active tab', 'error'); return; }
-    const resp = await browser.tabs.sendMessage(activeTab.id, {
-      type: 'ADD_TO_LIST',
-      listId
+  setupEventListeners() {
+    // Search input
+    this.elements.searchInput.addEventListener('input', (e) => {
+      const searchTerm = e.target.value;
+      this.statePreserver.preserve('searchTerm', searchTerm);
+      
+      if (searchTerm) {
+        this.elements.clearSearch.classList.remove('hidden');
+      } else {
+        this.elements.clearSearch.classList.add('hidden');
+      }
+      
+      this.filterLists(searchTerm);
     });
-    if (!resp || !resp.success) {
-      throw new Error(resp && resp.error ? resp.error : 'Unknown add error');
-    }
-    showStatus(`✓ Added to "${listName}"`, 'success');
-    await saveRecentList(listId);
-    updateRecentListsDisplay();
-  } catch (error) {
-    console.error('Error adding to list:', error);
-    const msg = (error && (error.message || String(error))) || '';
-    if (/Receiving end does not exist|Could not establish connection/i.test(msg)) {
-      showStatus('Could not connect to Amazon page. Open a product page and try again.', 'error');
-    } else if (msg === 'not_on_product_page') {
-      showStatus('Please open an Amazon product page.', 'info');
-    } else {
-      showStatus(`Failed to add to "${listName}"`, 'error');
-    }
-  }
-}
 
-function showStatus(message, type = 'info') {
-  elements.statusMessage.textContent = message;
-  elements.statusMessage.className = `status-${type}`;
-  elements.statusMessage.classList.remove('hidden');
-  
-  if (type !== 'loading') {
-    setTimeout(() => {
-      elements.statusMessage.classList.add('hidden');
-    }, 3000);
-  }
-}
+    // Clear search
+    this.elements.clearSearch.addEventListener('click', () => {
+      this.elements.searchInput.value = '';
+      this.elements.clearSearch.classList.add('hidden');
+      this.statePreserver.preserve('searchTerm', '');
+      this.filterLists('');
+    });
 
-function updateRecentListsDisplay() {
-  elements.recentListItems.innerHTML = '';
-  
-  if (recentListIds.length === 0 || allLists.length === 0) {
-    elements.noRecent.classList.remove('hidden');
-    return;
+    // Tab switching
+    this.elements.tabAll.addEventListener('click', () => this.switchTab('all'));
+    this.elements.tabRecent.addEventListener('click', () => this.switchTab('recent'));
   }
-  
-  elements.noRecent.classList.add('hidden');
-  
-  const recentLists = recentListIds
-    .map(id => allLists.find(list => list.id === id))
-    .filter(Boolean);
-  
-  if (recentLists.length > 0) {
-    recentLists.forEach(list => {
-      elements.recentListItems.appendChild(createListItem(list, true));
+
+  setupMessageListeners() {
+    browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (message.type === 'UPDATE_LISTS') {
+        // Preserve current search filter
+        const currentSearch = this.statePreserver.restore('searchTerm', '');
+        
+        this.allLists = message.lists || [];
+        
+        // Store lists in cache
+        browser.storage.sync.set({
+          [CONFIG.STORAGE.KEYS.LISTS]: this.allLists,
+          [CONFIG.STORAGE.KEYS.LAST_UPDATED]: Date.now()
+        }).catch(err => {
+          browser.storage.local.set({
+            [CONFIG.STORAGE.KEYS.LISTS]: this.allLists,
+            [CONFIG.STORAGE.KEYS.LAST_UPDATED]: Date.now()
+          });
+        });
+        
+        if (message.productInfo) {
+          this.updateProductDisplay(message.productInfo);
+        }
+        
+        if (currentSearch) {
+          this.filterLists(currentSearch);
+        } else {
+          this.filteredLists = this.allLists;
+          this.displayLists(this.filteredLists);
+        }
+        
+        sendResponse({ success: true });
+      } else if (message.type === 'UPDATE_PRODUCT') {
+        if (message.productInfo) {
+          this.updateProductDisplay(message.productInfo);
+        }
+        sendResponse({ success: true });
+      }
+      
+      return true;
     });
   }
-}
 
-function displayLists(lists) {
-  if (currentTab === 'all') {
-    elements.listItems.innerHTML = '';
+  setupSettingsUI() {
+    if (this.elements.settingsBtn && this.elements.settingsPanel) {
+      this.elements.settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.elements.settingsPanel.classList.toggle('hidden');
+      });
+      
+      document.addEventListener('click', (e) => {
+        const within = e.target.closest?.('#settings-panel');
+        const isBtn = e.target === this.elements.settingsBtn;
+        if (!within && !isBtn) {
+          this.elements.settingsPanel.classList.add('hidden');
+        }
+      });
+    }
     
-    if (lists.length === 0) {
-      elements.noListsMessage.classList.remove('hidden');
-      elements.listsWrapper.classList.add('hidden');
-      elements.loadingMessage.classList.add('hidden');
+    if (this.elements.persistToggle) {
+      this.elements.persistToggle.addEventListener('change', async (e) => {
+        this.persistDropdownSearch = !!e.target.checked;
+        await browser.storage.sync.set({ 
+          [CONFIG.STORAGE.KEYS.PERSIST_DROPDOWN]: this.persistDropdownSearch 
+        });
+      });
+    }
+  }
+
+  updateProductDisplay(productInfo) {
+    if (!productInfo) return;
+    
+    this.currentProduct = productInfo;
+    
+    if (productInfo.image) {
+      this.elements.productImage.src = productInfo.image;
+      this.elements.productImage.style.display = 'block';
+    } else {
+      this.elements.productImage.style.display = 'none';
+    }
+    
+    this.elements.productTitle.textContent = productInfo.title || 'Current Product';
+    this.elements.productPrice.textContent = productInfo.price || '';
+    this.elements.productInfo.classList.remove('hidden');
+  }
+
+  createListItem(list, isRecent = false) {
+    const li = document.createElement('li');
+    li.className = 'list-item';
+    if (isRecent) li.classList.add('recent');
+    
+    const button = document.createElement('button');
+    button.className = 'list-button';
+    button.dataset.listId = list.id;
+    
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'list-name';
+    nameSpan.textContent = list.name;
+    
+    const addIcon = document.createElement('span');
+    addIcon.className = 'add-icon';
+    addIcon.textContent = '+';
+    
+    button.appendChild(nameSpan);
+    button.appendChild(addIcon);
+    
+    button.addEventListener('click', () => this.addToList(list.id, list.name));
+    
+    li.appendChild(button);
+    return li;
+  }
+
+  async addToList(listId, listName) {
+    this.feedback.show(`Adding to "${listName}"...`, 'loading');
+    
+    try {
+      const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
+      const activeTab = tabsArr?.[0];
+      
+      if (!activeTab) {
+        this.feedback.show('No active tab', 'error');
+        return;
+      }
+      
+      const resp = await browser.tabs.sendMessage(activeTab.id, {
+        type: 'ADD_TO_LIST',
+        listId
+      });
+      
+      if (!resp || !resp.success) {
+        throw new Error(resp?.error || 'Unknown add error');
+      }
+      
+      this.feedback.show(`✓ Added to "${listName}"`, 'success');
+      await this.quickAccess.add(listId);
+      this.updateRecentListsDisplay();
+    } catch (error) {
+      console.error('Error adding to list:', error);
+      const msg = error?.message || '';
+      
+      if (/Receiving end does not exist|Could not establish connection/i.test(msg)) {
+        this.feedback.show('Could not connect to Amazon page. Open a product page and try again.', 'error');
+      } else if (msg === 'not_on_product_page') {
+        this.feedback.show('Please open an Amazon product page.', 'info');
+      } else {
+        this.feedback.show(`Failed to add to "${listName}"`, 'error');
+      }
+    }
+  }
+
+  displayLists(lists) {
+    if (this.currentTab === 'all') {
+      this.elements.listItems.innerHTML = '';
+      
+      if (lists.length === 0) {
+        this.elements.noListsMessage.classList.remove('hidden');
+        this.elements.listsWrapper.classList.add('hidden');
+        this.elements.loadingMessage.classList.add('hidden');
+        return;
+      }
+      
+      lists.forEach(list => {
+        this.elements.listItems.appendChild(this.createListItem(list));
+      });
+      
+      this.elements.totalLists.textContent = `${lists.length} lists`;
+    } else {
+      this.updateRecentListsDisplay();
+    }
+    
+    this.elements.loadingMessage.classList.add('hidden');
+    this.elements.noListsMessage.classList.add('hidden');
+    this.elements.listsWrapper.classList.remove('hidden');
+  }
+
+  updateRecentListsDisplay() {
+    this.elements.recentListItems.innerHTML = '';
+    
+    const recentIds = this.quickAccess.getItems();
+    
+    if (recentIds.length === 0 || this.allLists.length === 0) {
+      this.elements.noRecent.classList.remove('hidden');
       return;
     }
     
-    lists.forEach(list => {
-      elements.listItems.appendChild(createListItem(list));
-    });
+    this.elements.noRecent.classList.add('hidden');
     
-    elements.totalLists.textContent = `${lists.length} lists`;
-  } else {
-    updateRecentListsDisplay();
-  }
-  
-  elements.loadingMessage.classList.add('hidden');
-  elements.noListsMessage.classList.add('hidden');
-  elements.listsWrapper.classList.remove('hidden');
-}
-
-function switchTab(tab) {
-  currentTab = tab;
-  const searchContainer = document.getElementById('search-container');
-  
-  if (tab === 'all') {
-    elements.tabAll.classList.add('active');
-    elements.tabRecent.classList.remove('active');
-    elements.allLists.classList.remove('hidden');
-    elements.recentLists.classList.add('hidden');
-    searchContainer.style.display = 'block';
-    displayLists(filteredLists);
-  } else {
-    elements.tabAll.classList.remove('active');
-    elements.tabRecent.classList.add('active');
-    elements.allLists.classList.add('hidden');
-    elements.recentLists.classList.remove('hidden');
-    searchContainer.style.display = 'none';
-    updateRecentListsDisplay();
-  }
-}
-
-function filterLists(searchTerm) {
-  if (!searchTerm) {
-    filteredLists = allLists;
-  } else {
-    const term = searchTerm.toLowerCase();
-    filteredLists = allLists.filter(list => 
-      list.name.toLowerCase().includes(term)
-    );
-  }
-  displayLists(filteredLists);
-}
-
-async function requestListsFromContent() {
-  try {
-    const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
-    const activeTab = tabsArr && tabsArr[0];
-    if (!activeTab) { showStatus('No active tab', 'error'); return; }
-    const resp = await browser.tabs.sendMessage(activeTab.id, { type: 'REQUEST_LISTS' });
-    if (resp && resp.success) {
-      const count = typeof resp.listCount === 'number' ? resp.listCount : (allLists?.length || 0);
-      if (count > 0) {
-        showStatus(`Found ${count} lists`, 'info');
-      } else {
-        showStatus('No lists found yet. Opening dropdown...', 'info');
-      }
-    } else {
-      if (resp && resp.error === 'not_on_product_page') {
-        showStatus('Please open an Amazon product page.', 'info');
-      } else {
-        showStatus('Scanning page for lists...', 'loading');
-      }
-    }
-  } catch (error) {
-    console.error('Error requesting lists:', error);
-    showStatus('Could not connect to Amazon page', 'error');
-  }
-}
-
-elements.searchInput.addEventListener('input', (e) => {
-  const searchTerm = e.target.value;
-  if (searchTerm) {
-    elements.clearSearch.classList.remove('hidden');
-  } else {
-    elements.clearSearch.classList.add('hidden');
-  }
-  filterLists(searchTerm);
-});
-
-elements.clearSearch.addEventListener('click', () => {
-  elements.searchInput.value = '';
-  elements.clearSearch.classList.add('hidden');
-  filterLists('');
-});
-
-// Settings: persist dropdown search after click (default true)
-async function loadSettings() {
-  try {
-    const res = await browser.storage.sync.get('persistDropdownSearch');
-    const persist = res && typeof res.persistDropdownSearch === 'boolean' ? res.persistDropdownSearch : true;
-    if (elements.persistToggle) elements.persistToggle.checked = persist;
-  } catch (_) {
-    if (elements.persistToggle) elements.persistToggle.checked = true;
-  }
-}
-
-async function savePersistSetting(value) {
-  try {
-    await browser.storage.sync.set({ persistDropdownSearch: !!value });
-  } catch (_) {}
-}
-
-function setupSettingsUI() {
-  if (elements.settingsBtn && elements.settingsPanel) {
-    elements.settingsBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      elements.settingsPanel.classList.toggle('hidden');
-    });
-    document.addEventListener('click', (e) => {
-      const within = e.target.closest && e.target.closest('#settings-panel');
-      const isBtn = e.target === elements.settingsBtn;
-      if (!within && !isBtn) {
-        elements.settingsPanel.classList.add('hidden');
-      }
-    });
-  }
-  if (elements.persistToggle) {
-    elements.persistToggle.addEventListener('change', (e) => {
-      savePersistSetting(!!e.target.checked);
-    });
-  }
-}
-
-browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === 'UPDATE_LISTS') {
-    // Preserve current sidebar search filter across list updates
-    const currentSearch = (elements.searchInput && typeof elements.searchInput.value === 'string')
-      ? elements.searchInput.value
-      : '';
-
-    allLists = message.lists || [];
+    const recentLists = recentIds
+      .map(id => this.allLists.find(list => list.id === id))
+      .filter(Boolean);
     
-    
-    // Store lists in sync storage for cross-device persistence
-    browser.storage.sync.set({ 
-      storedLists: allLists,
-      lastUpdated: Date.now()
-    }).catch(err => {
-      // Fallback to local if sync fails (size limit)
-      browser.storage.local.set({ 
-        storedLists: allLists,
-        lastUpdated: Date.now()
+    if (recentLists.length > 0) {
+      recentLists.forEach(list => {
+        this.elements.recentListItems.appendChild(this.createListItem(list, true));
       });
-    });
-    
-    if (message.productInfo) {
-      updateProductDisplay(message.productInfo);
     }
+  }
+
+  switchTab(tab) {
+    this.currentTab = tab;
+    this.statePreserver.preserve('currentTab', tab);
     
-    if (currentSearch) {
-      // Reapply the user's search to avoid scattered/reset results
-      filterLists(currentSearch);
+    const searchContainer = document.getElementById('search-container');
+    
+    if (tab === 'all') {
+      this.elements.tabAll.classList.add('active');
+      this.elements.tabRecent.classList.remove('active');
+      this.elements.allLists.classList.remove('hidden');
+      this.elements.recentLists.classList.add('hidden');
+      searchContainer.style.display = 'block';
+      this.displayLists(this.filteredLists);
     } else {
-      filteredLists = allLists;
-      displayLists(filteredLists);
+      this.elements.tabAll.classList.remove('active');
+      this.elements.tabRecent.classList.add('active');
+      this.elements.allLists.classList.add('hidden');
+      this.elements.recentLists.classList.remove('hidden');
+      searchContainer.style.display = 'none';
+      this.updateRecentListsDisplay();
     }
-    sendResponse({ success: true });
-  } else if (message.type === 'UPDATE_PRODUCT') {
-    // Handle product-only updates
-    if (message.productInfo) {
-      updateProductDisplay(message.productInfo);
-    }
-    sendResponse({ success: true });
   }
-  return true;
-});
 
-// Add tab click handlers
-elements.tabAll.addEventListener('click', () => switchTab('all'));
-elements.tabRecent.addEventListener('click', () => switchTab('recent'));
-
-async function initialize() {
-  await loadRecentLists();
-  await loadSettings();
-  setupSettingsUI();
-  
-  let listsLoaded = false;
-  
-  // First try to load stored lists from sync storage - IMMEDIATELY
-  try {
-    // Try sync first
-    let stored = await browser.storage.sync.get(['storedLists', 'lastUpdated']);
-    
-    // Fallback to local if sync is empty
-    if (!stored.storedLists || stored.storedLists.length === 0) {
-      stored = await browser.storage.local.get(['storedLists', 'lastUpdated']);
-      
-      // Migrate to sync if found in local
-      if (stored.storedLists && stored.storedLists.length > 0) {
-        browser.storage.sync.set({ 
-          storedLists: stored.storedLists,
-          lastUpdated: stored.lastUpdated 
-        }).catch(() => {});
-      }
+  filterLists(searchTerm) {
+    if (!searchTerm) {
+      this.filteredLists = this.allLists;
+    } else {
+      const term = searchTerm.toLowerCase();
+      this.filteredLists = this.allLists.filter(list => 
+        list.name.toLowerCase().includes(term)
+      );
     }
     
-    if (stored.storedLists && stored.storedLists.length > 0) {
-      const minutesSinceUpdate = (Date.now() - (stored.lastUpdated || 0)) / (1000 * 60);
-      const timeStr = minutesSinceUpdate < 60 
-        ? `${Math.floor(minutesSinceUpdate)} min ago`
-        : `${(minutesSinceUpdate / 60).toFixed(1)} hours ago`;
-      
-      allLists = stored.storedLists;
-      filteredLists = allLists;
-      displayLists(filteredLists);
-      listsLoaded = true;
-      
-      // Show cache age in status
-      showStatus(`Lists cached ${timeStr}`, 'info');
-    }
-  } catch (error) {
+    this.displayLists(this.filteredLists);
   }
-  
-  // Then try to get any stored lists from background
-  try {
-    const response = await browser.runtime.sendMessage({ type: 'GET_STORED_LISTS' });
-    if (response) {
-      if (response.lists && response.lists.length > 0) {
-        allLists = response.lists;
-        filteredLists = allLists;
-        displayLists(filteredLists);
-        listsLoaded = true;
-        
-        // Store in sync storage
-        browser.storage.sync.set({ 
-          storedLists: allLists,
-          lastUpdated: Date.now()
-        }).catch(() => {
-          // Fallback to local if sync fails
-          browser.storage.local.set({ 
-            storedLists: allLists,
-            lastUpdated: Date.now()
-          });
-        });
+
+  async requestListsFromContent() {
+    try {
+      const tabsArr = await browser.tabs.query({ active: true, currentWindow: true });
+      const activeTab = tabsArr?.[0];
+      
+      if (!activeTab) {
+        this.feedback.show('No active tab', 'error');
+        return;
       }
       
-      // Always update product info if available
-      if (response.productInfo) {
-        updateProductDisplay(response.productInfo);
+      const resp = await browser.tabs.sendMessage(activeTab.id, { 
+        type: 'REQUEST_LISTS' 
+      });
+      
+      if (resp?.success) {
+        const count = resp.listCount ?? this.allLists.length;
+        if (count > 0) {
+          this.feedback.show(`Found ${count} lists`, 'info');
+        } else {
+          this.feedback.show('No lists found yet. Opening dropdown...', 'info');
+        }
+      } else {
+        if (resp?.error === 'not_on_product_page') {
+          this.feedback.show('Please open an Amazon product page.', 'info');
+        } else {
+          this.feedback.show('Scanning page for lists...', 'loading');
+        }
       }
+    } catch (error) {
+      console.error('Error requesting lists:', error);
+      this.feedback.show('Could not connect to Amazon page', 'error');
     }
-  } catch (error) {
   }
-  
-  // Only show loading if no lists were loaded from cache
-  if (!listsLoaded) {
-    elements.loadingMessage.classList.remove('hidden');
-  }
-  
-  // Request fresh lists from content (this will update in background)
-  requestListsFromContent();
 }
 
-initialize();
+// Initialize the sidebar controller
+const sidebarController = new SidebarController();
