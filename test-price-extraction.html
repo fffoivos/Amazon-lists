@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Price Extraction</title>
+</head>
+<body>
+    <h1>Amazon Price Extraction Test</h1>
+    
+    <!-- Test Case 1: Book with Paperback price -->
+    <div id="test1">
+        <h3>Test 1: Book with Paperback price</h3>
+        <div id="tmm-grid-swatch-PAPERBACK">
+            <span class="slot-price">$19.99</span>
+        </div>
+        <div id="tmm-grid-swatch-HARDCOVER">
+            <span class="slot-price">$491.63</span>
+        </div>
+    </div>
+    
+    <!-- Test Case 2: Book with Paperback unavailable -->
+    <div id="test2">
+        <h3>Test 2: Paperback unavailable</h3>
+        <div id="tmm-grid-swatch-PAPERBACK">
+            <span class="slot-price">—</span>
+        </div>
+        <span class="olp-link aod-popover-caret-link">Other Used and New from $491.63</span>
+    </div>
+    
+    <!-- Test Case 3: Regular product (not a book) -->
+    <div id="test3">
+        <h3>Test 3: Regular product</h3>
+        <span class="a-price-whole">$29.99</span>
+    </div>
+    
+    <script>
+        // Test the price extraction logic
+        function extractPrice() {
+            let extractedPrice = '';
+            
+            // First, try to get Paperback price from the format selector
+            const paperbackSwatch = document.querySelector('#tmm-grid-swatch-PAPERBACK .slot-price');
+            if (paperbackSwatch) {
+                const priceText = paperbackSwatch.textContent.trim();
+                // Extract price if it's not just "—"
+                if (priceText && priceText !== '—') {
+                    extractedPrice = priceText;
+                }
+            }
+            
+            // If no Paperback price, try to get price from "Other Used and New" section
+            if (!extractedPrice) {
+                const otherPriceElement = document.querySelector('.olp-link.aod-popover-caret-link');
+                if (otherPriceElement) {
+                    const priceMatch = otherPriceElement.textContent.match(/\$[\d,]+\.?\d*/);
+                    if (priceMatch) {
+                        extractedPrice = priceMatch[0];
+                    }
+                }
+            }
+            
+            // If still no price, fall back to standard price selectors
+            if (!extractedPrice) {
+                const priceElement = document.querySelector('.a-price-whole, .a-price-range, .a-price.a-text-price, .a-price-value');
+                extractedPrice = priceElement ? priceElement.textContent.trim().replace(/\s+/g, ' ') : '';
+            }
+            
+            return extractedPrice;
+        }
+        
+        console.log('Extracted Price:', extractPrice());
+        document.body.innerHTML += '<h2>Extracted Price: ' + extractPrice() + '</h2>';
+    </script>
+</body>
+</html>

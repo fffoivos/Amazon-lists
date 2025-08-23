@@ -22,8 +22,7 @@ const CONFIG = {
       CREATE_LIST_MODAL: ['.a-popover-modal[aria-label*="Create a new list"]', '.a-popover-modal']
     },
     TIMING: {
-      POPOVER_WAIT_TIMEOUT_MS: 5000,
-      CONFIRMATION_WAIT_TIMEOUT_MS: 1500
+      POPOVER_WAIT_TIMEOUT_MS: 5000
     }
   },
   CONVENIENCE: {
@@ -315,8 +314,49 @@ class AmazonListSidebarContent {
       );
     }
     
-    const priceElement = document.querySelector('.a-price-whole, .a-price-range, .a-price.a-text-price, .a-price-value');
-    info.price = priceElement ? priceElement.textContent.trim().replace(/\s+/g, ' ') : '';
+    // Enhanced price extraction logic - Priority order:
+    // 1. Paperback price
+    // 2. Hardcover price  
+    // 3. "Other Used and New" price
+    // 4. Nothing (no fallback to general price selectors)
+    let extractedPrice = '';
+    
+    // First priority: Paperback price from the format selector
+    const paperbackSwatch = document.querySelector('#tmm-grid-swatch-PAPERBACK .slot-price');
+    if (paperbackSwatch) {
+      const priceText = paperbackSwatch.textContent.trim();
+      // Extract price if it's not just "—"
+      if (priceText && priceText !== '—') {
+        extractedPrice = priceText;
+      }
+    }
+    
+    // Second priority: Hardcover price if no Paperback
+    if (!extractedPrice) {
+      const hardcoverSwatch = document.querySelector('#tmm-grid-swatch-HARDCOVER .slot-price');
+      if (hardcoverSwatch) {
+        const priceText = hardcoverSwatch.textContent.trim();
+        // Extract price if it's not just "—"
+        if (priceText && priceText !== '—') {
+          extractedPrice = priceText;
+        }
+      }
+    }
+    
+    // Third priority: "Other Used and New" section
+    if (!extractedPrice) {
+      const otherPriceElement = document.querySelector('.olp-link.aod-popover-caret-link');
+      if (otherPriceElement) {
+        const priceMatch = otherPriceElement.textContent.match(/\$[\d,]+\.?\d*/);
+        if (priceMatch) {
+          extractedPrice = priceMatch[0];
+        }
+      }
+    }
+    
+    // No fallback - if none of the above, show nothing
+    
+    info.price = extractedPrice;
     
     const imageElement = document.querySelector('#landingImage, #imgBlkFront, .a-dynamic-image');
     info.image = imageElement ? imageElement.src : '';
@@ -453,7 +493,8 @@ class AmazonListSidebarContent {
   }
 
   async handleAddToListAction(listId) {
-    return await this.retryManager.retry(async (attempt) => {
+    // Open dropdown and find the list link (with retries)
+    const { popover, linkElement } = await this.retryManager.retry(async (attempt) => {
       const popover = await this.openListDropdownAndWait();
       if (!popover) throw new Error('Could not open dropdown');
 
@@ -466,52 +507,27 @@ class AmazonListSidebarContent {
       
       if (!linkElement) throw new Error('List element not found');
       
-      this.eventSimulator.click(linkElement);
-      
-      if (!this.persistDropdownSearch) {
-        this.filterPersistence.clear();
-        this.setListFilterValue(popover, '');
-      }
-      
-      const confirmed = await this.waitForAddConfirmation(popover);
-      if (confirmed) {
-        if (!this.persistDropdownSearch) {
-          this.filterPersistence.clear();
-        }
-        return true;
-      }
-      
-      throw new Error('Confirmation not received');
+      return { popover, linkElement };
     }, {
       maxAttempts: CONFIG.INTERACTION.RETRY.MAX_ATTEMPTS,
       baseDelay: CONFIG.INTERACTION.RETRY.BASE_DELAY_MS
     });
+
+    // Click the list link once
+    this.eventSimulator.click(linkElement);
+    
+    // Wait for the action to process
+    await new Promise(r => setTimeout(r, 1000));
+    
+    // Clear filter if needed
+    if (!this.persistDropdownSearch) {
+      this.filterPersistence.clear();
+      this.setListFilterValue(popover, '');
+    }
+    
+    return true;
   }
 
-  async waitForAddConfirmation(popover, timeout = CONFIG.INTERACTION.TIMING.CONFIRMATION_WAIT_TIMEOUT_MS) {
-    const start = Date.now();
-    return new Promise((resolve) => {
-      const check = () => {
-        const header = document.querySelector('.huc-atwl-header-main');
-        if (header && /added|moved|already/i.test(header.textContent || '')) return resolve(true);
-        
-        const regions = document.querySelectorAll('.a-popover[aria-hidden="false"], #atwl-popover-inner, .a-dropdown, [role="alert"]');
-        for (const el of regions) {
-          const txt = (el.textContent || '').toLowerCase();
-          if (/\b(item|items)\s+(added|moved)\s+to\b/.test(txt) || /already in/.test(txt) || /view your list/.test(txt)) {
-            return resolve(true);
-          }
-        }
-        
-        if (Date.now() - start >= timeout) return resolve(false);
-      };
-      
-      const observer = new MutationObserver(() => check());
-      observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
-      check();
-      setTimeout(() => { observer.disconnect(); resolve(false); }, timeout);
-    });
-  }
 
   findListSearchInput(scopeEl) {
     const container = scopeEl || document.querySelector('.a-popover[aria-hidden="false"], #atwl-popover-inner, .a-dropdown') || document;
