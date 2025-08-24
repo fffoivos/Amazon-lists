@@ -736,6 +736,8 @@ class AmazonListSidebarContent {
                       document.querySelector('#atwl-popover-inner');
       if (popover) {
         this.extractListsFromDropdown(popover);
+        // Send the updated lists to the sidebar immediately
+        this.sendListsToSidebar();
       }
 
       return { success: true, listName: listName };
